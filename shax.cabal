@@ -1,0 +1,104 @@
+cabal-version: 2.2
+
+-- This file has been generated from package.yaml by hpack version 0.36.0.
+--
+-- see: https://github.com/sol/hpack
+
+name:           shax
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/shax#readme>
+homepage:       https://github.com/githubuser/shax#readme
+bug-reports:    https://github.com/githubuser/shax/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2023 Author name here
+license:        BSD-3-Clause
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/shax
+
+library
+  exposed-modules:
+      BiMap
+      Binding
+      BroadcastSemantics
+      Definition
+      Error
+      Eval
+      HNP
+      Linearize
+      Shaxpr
+      TypeInference
+      Types
+  other-modules:
+      Paths_shax
+  autogen-modules:
+      Paths_shax
+  hs-source-dirs:
+      src
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  build-depends:
+      base >=4.7 && <5
+    , containers >=0.6.7
+    , data-fix >=0.3.2
+    , deriving-compat >=0.6.5
+    , fin >=0.3
+    , mtl >=2.2.2
+    , orthotope >=0.1.6.0
+    , orthotope-hmatrix >=0.1.2.0
+    , pretty >=1.1.3.6
+    , recursion-schemes >=5.2.2.5
+  default-language: Haskell2010
+
+executable shax-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_shax
+  autogen-modules:
+      Paths_shax
+  hs-source-dirs:
+      app
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , containers >=0.6.7
+    , data-fix >=0.3.2
+    , deriving-compat >=0.6.5
+    , fin >=0.3
+    , mtl >=2.2.2
+    , orthotope >=0.1.6.0
+    , orthotope-hmatrix >=0.1.2.0
+    , pretty >=1.1.3.6
+    , recursion-schemes >=5.2.2.5
+    , shax
+  default-language: Haskell2010
+
+test-suite shax-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_shax
+  autogen-modules:
+      Paths_shax
+  hs-source-dirs:
+      test
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , containers >=0.6.7
+    , data-fix >=0.3.2
+    , deriving-compat >=0.6.5
+    , fin >=0.3
+    , mtl >=2.2.2
+    , orthotope >=0.1.6.0
+    , orthotope-hmatrix >=0.1.2.0
+    , pretty >=1.1.3.6
+    , recursion-schemes >=5.2.2.5
+    , shax
+  default-language: Haskell2010
