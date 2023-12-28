@@ -1,11 +1,13 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE InstanceSigs #-}
 
 module Types(module Types) where
 
 import Data.Array.Dynamic as D
 import Text.PrettyPrint.HughesPJClass
 import Prelude hiding ((<>))
+import GHC.Stack
 
 data TensorBaseType = TFloat | TInt deriving (Show, Eq, Ord)
 instance Pretty TensorBaseType where
@@ -44,29 +46,40 @@ shape :: SomeArray -> Shape
 shape (FloatArray arr) = D.shapeL arr
 shape (IntArray arr) = D.shapeL arr
 
+toFloatList :: SomeArray -> [Float]
+toFloatList (IntArray _) = error "Cannot get a float list from an int array."
+toFloatList (FloatArray arr) = D.toList arr
+
 someArrayType :: SomeArray -> TensorType
 someArrayType (FloatArray arr) = TensorType TFloat (D.shapeL arr)
 someArrayType (IntArray arr) = TensorType TInt (D.shapeL arr)
 
-sameTypeNumBin :: (forall a. Num a => a -> a -> a) -> SomeArray -> SomeArray -> SomeArray
-sameTypeNumBin op (FloatArray x) (FloatArray y) = FloatArray (D.zipWithA op x y)
-sameTypeNumBin op (IntArray x) (IntArray y) = IntArray (D.zipWithA op x y)
-sameTypeNumBin _ _ _ = error "Cannot happen."
+sameTypeNumBin :: HasCallStack => (forall a. Num a => a -> a -> a) -> String -> SomeArray -> SomeArray -> SomeArray
+sameTypeNumBin op opName (FloatArray x) (FloatArray y) = FloatArray (D.zipWithA op x y)
+sameTypeNumBin op opName (IntArray x) (IntArray y) = IntArray (D.zipWithA op x y)
+sameTypeNumBin _ opName x y = error $ "Invalid binary op " ++ opName ++ " arguments: " ++ show x ++ ", " ++ show y
 
-oneTypeNumBin :: (forall a. Num a => a -> a) -> SomeArray -> SomeArray
-oneTypeNumBin op (FloatArray x) = FloatArray (D.mapA op x)
-oneTypeNumBin op (IntArray x) = IntArray (D.mapA op x)
+oneTypeNum :: (forall a. Num a => a -> a) -> SomeArray -> SomeArray
+oneTypeNum op (FloatArray x) = FloatArray (D.mapA op x)
+oneTypeNum op (IntArray x) = IntArray (D.mapA op x)
 
 instance Num SomeArray where
-  (+) = sameTypeNumBin (+)
-  (-) = sameTypeNumBin (-)
-  (*) = sameTypeNumBin (*)
-  abs = oneTypeNumBin abs
-  signum = oneTypeNumBin signum
+  (+) = sameTypeNumBin (+) "+"
+  (-) = sameTypeNumBin (-) "-"
+  (*) = sameTypeNumBin (*) "*"
+  abs = oneTypeNum abs
+  signum = oneTypeNum signum
+  negate = oneTypeNum negate
+
   fromInteger = IntArray . D.fromList [] . return
 
 fromFloatScalar :: Float -> SomeArray
 fromFloatScalar = FloatArray . D.fromList [] . return
+
+zeroLike :: SomeArray -> SomeArray
+zeroLike (IntArray xs) = IntArray (D.constant (D.shapeL xs) 0)
+zeroLike (FloatArray xs) = FloatArray (D.constant (D.shapeL xs) 0.0)
+
 
 instance Fractional SomeArray where
   (FloatArray x) / (FloatArray y) = FloatArray (D.zipWithA (/) x y)

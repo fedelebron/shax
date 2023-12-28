@@ -7,7 +7,7 @@ import Text.PrettyPrint.HughesPJClass hiding (empty)
 import Prelude hiding ((<>))
 
 import BiMap
-import Types
+import Types (TensorType, VarName(..))
 import Binding
 import Shaxpr
 
@@ -15,7 +15,7 @@ data Definition = Definition {
   defName :: String,
   defArgTys :: [TensorType],
   defBinds :: [Binding],
-  defRet :: VarName
+  defRet :: [VarName]
 } deriving Show
 instance Pretty Definition where
   pPrintPrec k' l (Definition name argTys binds ret) =
@@ -28,8 +28,8 @@ instance Pretty Definition where
     in hang header 2 (body $$ footer)
 
 
-type LabelState = BiMap (ShaxprF Int)
-labeler :: ShaxprF Int -> State LabelState Int
+type LabelState = BiMap VarName (ShaxprF VarName)
+labeler :: ShaxprF VarName -> State LabelState VarName
 labeler ex = do
   m <- get
   let (k, m') = insert ex m
@@ -39,13 +39,13 @@ labeler ex = do
 everywhere :: Monad m => (ShaxprF a -> m a) -> Shaxpr -> m a
 everywhere f (Shaxpr (Fix (ShaxprF ty op args))) = (ShaxprF ty op <$> mapM (everywhere f . Shaxpr) args) >>= f
 
-toDefinition :: String -> [TensorType] -> Shaxpr -> Definition
-toDefinition name tys f =
-  let (returnLabel, labels) = runState (everywhere labeler f) empty
-      binds = [Binding (VarName v) (fmap VarName e) | (v, e) <- M.toList (to labels)]
+toDefinition :: String -> [TensorType] -> [Shaxpr] -> Definition
+toDefinition name tys fs =
+  let (returnLabels, labels) = runState (mapM (everywhere labeler) fs) empty
+      binds = [Binding v e | (v, e) <- M.toList (to labels)]
   in  Definition {
                   defName = name,
                   defArgTys = tys,
                   defBinds = binds,
-                  defRet = VarName returnLabel
+                  defRet = returnLabels
                  }

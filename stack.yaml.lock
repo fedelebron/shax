@@ -67,6 +67,27 @@ packages:
       size: 1308
   original:
     hackage: pretty-1.1.3.6
+- completed:
+    hackage: lens-5.2.3@sha256:637287c76adff383063b3206a4213640de1a74839ec16008cc71b5b407f7d05e,15237
+    pantry-tree:
+      sha256: 2a69ee338ef79da9aaa0d406f8307b11e3b8f969aa8fc28e46ca250c1f6ef40d
+      size: 8351
+  original:
+    hackage: lens-5.2.3
+- completed:
+    hackage: QuickCheck-2.14.3@sha256:f03d2f404d5ba465453d0fbc1944832789a759fe7c4f9bf8616bc1378a02fde4,7847
+    pantry-tree:
+      sha256: e920d61bcc10ef2aee0cc3e2a216d05b8491564ad27c1c5e2fbbb221b00b7f8e
+      size: 2315
+  original:
+    hackage: QuickCheck-2.14.3
+- completed:
+    hackage: generic-arbitrary-1.0.1@sha256:677fca5829b5691e3527bcfe8499300c393ec5d10ec2d4cffe8e63a1ca647c0b,3459
+    pantry-tree:
+      sha256: 38783a7c474443404b797d9acbf1dfe3fd9afdd193eea4c42e26d9d82b2b3c39
+      size: 702
+  original:
+    hackage: generic-arbitrary-1.0.1
 snapshots:
 - completed:
     sha256: 8809197159ce65ec2d66f91982e4844ad0c2cbd1126df42146dd103c0ea6cac0

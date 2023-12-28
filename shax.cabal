@@ -29,10 +29,12 @@ library
       Binding
       BroadcastSemantics
       Definition
+      Environment
       Error
       Eval
       HNP
       Linearize
+      Optimizations
       Shaxpr
       TypeInference
       Types
@@ -44,11 +46,14 @@ library
       src
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
-      base >=4.7 && <5
+      QuickCheck >=2.14.3
+    , base >=4.7 && <5
     , containers >=0.6.7
     , data-fix >=0.3.2
     , deriving-compat >=0.6.5
     , fin >=0.3
+    , generic-arbitrary >=1.0.1
+    , lens >=5.2.3
     , mtl >=2.2.2
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0
@@ -66,11 +71,14 @@ executable shax-exe
       app
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      QuickCheck >=2.14.3
+    , base >=4.7 && <5
     , containers >=0.6.7
     , data-fix >=0.3.2
     , deriving-compat >=0.6.5
     , fin >=0.3
+    , generic-arbitrary >=1.0.1
+    , lens >=5.2.3
     , mtl >=2.2.2
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0
@@ -81,8 +89,9 @@ executable shax-exe
 
 test-suite shax-test
   type: exitcode-stdio-1.0
-  main-is: Spec.hs
+  main-is: Testing.hs
   other-modules:
+      Main
       Paths_shax
   autogen-modules:
       Paths_shax
@@ -90,11 +99,14 @@ test-suite shax-test
       test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      QuickCheck >=2.14.3
+    , base >=4.7 && <5
     , containers >=0.6.7
     , data-fix >=0.3.2
     , deriving-compat >=0.6.5
     , fin >=0.3
+    , generic-arbitrary >=1.0.1
+    , lens >=5.2.3
     , mtl >=2.2.2
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0

@@ -1,4 +1,3 @@
-{-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE RankNTypes #-}
 
 module HNP(HNP(..), stretchArr) where
@@ -10,6 +9,7 @@ import qualified Data.Array.Dynamic as D
 
 import Types
 import Shaxpr
+import Data.Fix
 
 class HNP a where
   reshape :: Shape -> a -> a
@@ -23,10 +23,6 @@ wrapArrayOperation :: (forall a. D.Array a -> D.Array a) -> SomeArray -> SomeArr
 wrapArrayOperation f (IntArray arr) = IntArray (f arr)
 wrapArrayOperation f (FloatArray arr) = FloatArray (f arr)
 
-wrapArrayOperation2 :: (forall a. D.Array a -> D.Array a -> D.Array a) -> SomeArray -> SomeArray -> SomeArray
-wrapArrayOperation2 f (IntArray arr) (IntArray arr') = IntArray (f arr arr')
-wrapArrayOperation2 f (FloatArray arr) (FloatArray arr') = FloatArray (f arr arr')
-
 broadcastArr :: [Int] -> Shape -> SomeArray -> SomeArray
 broadcastArr dims sh = wrapArrayOperation (D.broadcast dims sh)
 
@@ -39,11 +35,7 @@ reshapeArr sh = wrapArrayOperation (D.reshape sh)
 transposeArr :: DimIxs -> SomeArray -> SomeArray
 transposeArr ixs = wrapArrayOperation (D.transpose ixs)
 
-rerank2Arr :: Int -> (forall a. D.Array a -> D.Array a -> D.Array a) -> SomeArray -> SomeArray -> SomeArray
-rerank2Arr n f = wrapArrayOperation2 (D.rerank2 n f)
-
--- We can't use wrapArrayOperation2 because MM.matMul has a typeclass constraint.
--- Also, MM.matMul can't deal with Integer, so we wrap to and from Int64.
+-- MM.matMul can't deal with Integer, so we wrap to and from Int64.
 -- Gross, I know.
 matMulArr3 :: SomeArray -> SomeArray -> SomeArray
 matMulArr3 (IntArray x) (IntArray y) =
@@ -52,6 +44,7 @@ matMulArr3 (IntArray x) (IntArray y) =
   in IntArray $ D.mapA fromIntegral (D.rerank2 1 MM.matMul x' y')
 matMulArr3 (FloatArray x) (FloatArray y) =
   FloatArray (D.rerank2 1 MM.matMul x y)
+matMulArr3 _ _ = error "Cannot happen."
 
 instance HNP SomeArray where
   reshape = reshapeArr
@@ -77,18 +70,16 @@ instance HNP SomeArray where
 data DimOrder = LHS | RHS deriving Show
 transposeAndReshapeForMatmul :: DimOrder -> DimIxs -> DimIxs -> DimIxs -> SomeArray -> SomeArray
 transposeAndReshapeForMatmul dimOrder contracting nonContracting batch x =
-  let allDims = [0 .. length (shape x) - 1]
-      nonContracting = allDims \\ (batch ++ contracting)
-      permParts = case dimOrder of
+  let permParts = case dimOrder of
         LHS -> [batch, nonContracting, contracting]
         RHS -> [batch, contracting, nonContracting]
       perm = concat permParts
-      newShape = map product $ map (map (shape x !!)) permParts
+      newShape = map (product . map (shape x !!)) permParts
   in  reshapeArr newShape (transposeArr perm x)
    
 
 instance HNP Shaxpr where
-  reshape = (Shaxpr .) . (. expr) . ReshapeShaxprF Nothing
-  broadcast ixs sh x = Shaxpr (BroadcastShaxprF Nothing ixs sh (expr x))
-  transpose = (Shaxpr .) . (. expr) . TransposeShaxprF Nothing
-  dotGeneral d x y = Shaxpr (DotGeneralShaxprF Nothing d (expr x) (expr y))
+  reshape = ((Shaxpr . Fix) . ) . (. expr) . ReshapeShaxprF Nothing
+  broadcast ixs sh x = Shaxpr . Fix $ BroadcastShaxprF Nothing ixs sh (expr x)
+  transpose = ((Shaxpr . Fix) .) . (. expr) . TransposeShaxprF Nothing
+  dotGeneral d x y = Shaxpr . Fix $ DotGeneralShaxprF Nothing d (expr x) (expr y)
