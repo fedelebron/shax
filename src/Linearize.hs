@@ -53,8 +53,6 @@ setPrimalValue name value = do
   extra . primalValues %= E.insert name value
   
 -- linearize p f = (f(p), f'_p)
--- TODO: Handle operations with implicit broadcasting. We probably want to make
--- broadcasts explicit.
 linearize :: HasCallStack => [SomeArray] -> Definition -> Either Error ([SomeArray], Definition)
 linearize args def = do
   checkDefArgumentTypes args def

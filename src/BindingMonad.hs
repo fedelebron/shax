@@ -84,3 +84,6 @@ newBind e = do
   let b = Binding v e
   env %= E.insert v b
   return v
+
+keepBind :: Binding -> BindingMonadComputation a VarName
+keepBind = newBind . bindExpr

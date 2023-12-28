@@ -5,26 +5,39 @@
 module Optimizations (foldConstants,
                       eliminateDeadCode,
                       eliminateCommonSubexpressions,
+                      materializeBroadcasts,
                       OptimizationPass(..),
                       applyPasses) where
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified BiMap as BM
 import qualified Environment as E
+import Data.Either (fromRight)
 import Data.Maybe (fromJust)
+import Text.PrettyPrint.HughesPJClass (prettyShow)
+
+import GHC.Stack
+import Control.Monad.State
+import Control.Monad.Except (throwError)
+
+import Control.Lens hiding (op)
+import BroadcastSemantics
+
 import Types
 import Binding
 import Definition
 import Shaxpr
 import Data.Fix
 import Eval
+import Error
 import GHC.Generics (Generic)
 
 import Test.QuickCheck.Arbitrary.Generic
 
 import Test.QuickCheck
+import BindingMonad
 
-data OptimizationPass = DCE | CSE | ConstantFolding
+data OptimizationPass = DCE | CSE | ConstantFolding | MaterializeBroadcasts
   deriving (Show, Eq, Ord, Generic)
   deriving (Arbitrary) via GenericArbitrary OptimizationPass
 
@@ -32,6 +45,7 @@ applyPass :: OptimizationPass -> Definition -> Definition
 applyPass DCE = eliminateDeadCode
 applyPass ConstantFolding = foldConstants
 applyPass CSE = eliminateCommonSubexpressions
+applyPass MaterializeBroadcasts = materializeBroadcasts
 
 applyPasses :: [OptimizationPass] -> Definition -> Definition
 applyPasses = foldr (.) id . map applyPass
@@ -82,5 +96,28 @@ eliminateCommonSubexpressions (Definition name argTys binds rets) =
                          | otherwise = name
 
 
-materializeBroadcasts :: Definition -> Definition
-materializeBroadcasts = id
+materializeBroadcasts :: HasCallStack => Definition -> Definition
+materializeBroadcasts = fst . fromRight err . walkBindings () broadcaster
+  where
+    err = error "Internal error: Failed to materialize broadcasts."
+    broadcaster :: BindingMapper ()
+    broadcaster b@(Binding _ (ShaxprF mte op args)) =
+      case (op, args) of
+        (BinaryPointwise bop, [x, y]) -> do
+          ee <- use env
+          mtx <- exprTy . bindExpr <$> lift (E.lookup x ee)
+          mty <- exprTy . bindExpr <$> lift (E.lookup y ee)
+          case (mtx, mty) of
+            (Just tx, Just ty) ->
+              if tx == ty then keepBind b
+              else do
+                BroadcastInDimResult ixx ixy common <- lift $ broadcastInDims (tyShape tx) (tyShape ty)
+                x' <- case ixx of
+                        Nothing -> return x
+                        Just s -> newBind (BroadcastShaxprF mte s common x)
+                y' <- case ixy of
+                        Nothing -> return y
+                        Just s -> newBind (BroadcastShaxprF mte s common y)
+                newBind (ShaxprF mte op [x', y'])
+            _ -> throwError (Error ("Failed to get type of operands in " ++ prettyShow b) callStack)
+        _ -> keepBind b

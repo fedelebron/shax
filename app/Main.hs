@@ -22,8 +22,8 @@ f a b c = let d = a + b
               e = transpose [1, 0] (cos d)
               h = sin d
               i = dot e h
-          --in i * max c 1.0
-          in i * max i c
+          in i * max c 1.0
+          --in i * max i c
 
 x :: SomeArray
 x = FloatArray $ D.fromList [2, 3] [1.0 .. 6.0]
@@ -56,7 +56,7 @@ g x y = let z = x + y
 main' :: [Shaxpr] -> [SomeArray] -> IO ()
 main' hs p = do
     let def = toDefinition "g" (map someArrayType p) hs
-        def' = inferTypes def
+        def' = materializeBroadcasts <$> inferTypes def
     case def' of
         Left err -> print err
         Right d' -> do
@@ -75,7 +75,7 @@ main' hs p = do
 
 main1 :: IO ()
 main1 = main' (close (g @Shaxpr)) [FloatArray (D.fromList [] [1.5]),
-                                  FloatArray (D.fromList [] [-2.5])]
+                                   FloatArray (D.fromList [] [-2.5])]
 
 main2 :: IO ()
 main2 = main' (close (f @Shaxpr)) [x, y, z]
