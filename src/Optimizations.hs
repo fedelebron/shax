@@ -132,7 +132,7 @@ canonicalizeDotGeneral :: Definition -> Definition
 canonicalizeDotGeneral = walkBindingsOrDie () canonicalizer
   where
     canonicalizer :: BindingMapper ()
-    canonicalizer b@(Binding _ (DotGeneralShaxprF ty dims x y)) = do
+    canonicalizer b@(Binding _ (DotGeneralShaxprF ty@(Just (TensorType bt sh)) dims x y)) = do
       currentEnv <- use env
       shx <- (tyShape . fromJust . bindType) <$> lift (E.lookup x currentEnv)
       shy <- (tyShape . fromJust . bindType) <$> lift (E.lookup y currentEnv)
@@ -141,7 +141,13 @@ canonicalizeDotGeneral = walkBindingsOrDie () canonicalizer
           rhsNonContractingIxs = getNonContracting shy rhsContractingIxs rhsBatchIxs
       x' <- transposeAndReshapeForMatmul LHS lhsContractingIxs lhsNonContractingIxs lhsBatchIxs shx x
       y' <- transposeAndReshapeForMatmul RHS rhsContractingIxs rhsNonContractingIxs rhsBatchIxs shy y
-      undefined
+      let batch = map (shx !!) lhsBatchIxs
+          lhsNonContracting = map (shx !!) lhsNonContractingIxs
+          rhsNonContracting = map (shy !!) rhsNonContractingIxs
+      let mmType = Just . TensorType bt $ [product batch, product lhsNonContracting, product rhsNonContracting]
+          canonicalDotDims = DotDimensionNumbers [2] [1] [0] [0]
+      z <- newBind (DotGeneralShaxprF mmType canonicalDotDims x' y')
+      newBind (ReshapeShaxprF ty (batch ++ lhsNonContracting ++ rhsNonContracting) z)
     canonicalizer x = keepBind x
     transposeAndReshapeForMatmul :: DimOrder -> DimIxs -> DimIxs -> DimIxs -> Shape -> VarName -> BindingMonadComputation () VarName
     transposeAndReshapeForMatmul dimOrder contracting nonContracting batch shx x = do
