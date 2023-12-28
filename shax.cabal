@@ -27,6 +27,7 @@ library
   exposed-modules:
       BiMap
       Binding
+      BindingMonad
       BroadcastSemantics
       Definition
       Environment

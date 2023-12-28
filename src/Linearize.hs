@@ -164,13 +164,25 @@ linearizeFunc mty op primals tangents = case (op, primals, tangents) of
     b <- createTangentBinding (DotGeneralShaxprF mty dims dx y0c)
     createTangentBinding (AddShaxprF mty a b)
   (BinaryPointwise Min, [x0, y0], [dx, dy]) -> do
+    -- Let f(x, y) = min(x, y).
+    -- Then f'(x_0, y_0)(dx, dy) = dx * (df/dx)(x_0, y_0) + dy * (df/dy)(x_0, y_0)
+    -- Take coordinate i. Say x_0_i < y_0_i.
+    -- Then f(x_0, y_0)_i = min(x_0, y_0)_i = x_0_i.
+    -- Thus (df/dx)_i = 1, (df/dy)_i = 0.
+    -- Else, say y_0_i < x_0_i. Then (df/dx)_i = 0, (df/dy)_i = 1.
+    -- We want it to be the case that if x_0_i = y_0_i, then
+    -- (df/dx)_i = (df/dy)_i = 1/2, as if for this coordinate, f_i(x, y) = (x+y)/2.
+    -- We accomplish this using a vector m, where each m_i is either 0, 1/2, or 1,
+    -- such that
+    -- f'(x_0, y_0)(dx, dy) = dx * m + dy * (1-m).
     case (x0, y0) of
       (FloatArray x0s, FloatArray y0s) -> cannotFail $ do
         let mask = FloatArray (D.zipWithA balancedMinMask x0s y0s)
-            negMask = FloatArray (D.zipWithA balancedMinMask y0s x0s)
+            ones = FloatArray (D.constant (D.shapeL x0s) 1.0)
         maskVar <- createTangentBinding (ConstantShaxprF mty mask)
         a <- createTangentBinding (MulShaxprF mty maskVar dx)
-        negMaskVar <- createTangentBinding (ConstantShaxprF mty negMask)
+        onesVar <- createTangentBinding (ConstantShaxprF mty ones)
+        negMaskVar <- createTangentBinding (SubShaxprF mty onesVar maskVar)
         b <- createTangentBinding (MulShaxprF mty negMaskVar dy)
         createTangentBinding (AddShaxprF mty a b)
       _ -> throwError (Error "Cannot take derivative of integer min." callStack)
@@ -178,10 +190,11 @@ linearizeFunc mty op primals tangents = case (op, primals, tangents) of
     case (x0, y0) of
       (FloatArray x0s, FloatArray y0s) -> cannotFail $ do
         let mask = FloatArray (D.zipWithA balancedMinMask y0s x0s)
-            negMask = FloatArray (D.zipWithA balancedMinMask x0s y0s)
+            ones = FloatArray (D.constant (D.shapeL x0s) 1.0)
         maskVar <- createTangentBinding (ConstantShaxprF mty mask)
         a <- createTangentBinding (MulShaxprF mty maskVar dx)
-        negMaskVar <- createTangentBinding (ConstantShaxprF mty negMask)
+        onesVar <- createTangentBinding (ConstantShaxprF mty ones)
+        negMaskVar <- createTangentBinding (SubShaxprF mty onesVar maskVar)
         b <- createTangentBinding (MulShaxprF mty negMaskVar dy)
         createTangentBinding (AddShaxprF mty a b)
       _ -> throwError (Error "Cannot take derivative of integer max." callStack)

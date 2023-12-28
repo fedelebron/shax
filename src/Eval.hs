@@ -34,6 +34,7 @@ evalShaxprF (Fix (ConstantShaxprF _ x)) = x
 evalShaxprF (Fix (SignumShaxprF _ x)) = signum (evalShaxprF x)
 evalShaxprF (Fix (NegateShaxprF _ x)) = negate (evalShaxprF x)
 evalShaxprF (Fix (AddShaxprF _ x y)) = wrapBroadcastSemantics (+) x y
+evalShaxprF (Fix (SubShaxprF _ x y)) = wrapBroadcastSemantics (-) x y
 evalShaxprF (Fix (MulShaxprF _ x y)) = wrapBroadcastSemantics (*) x y
 evalShaxprF (Fix (DivShaxprF _ x y)) = wrapBroadcastSemantics (/) x y
 evalShaxprF (Fix (CosShaxprF _ x)) = cos (evalShaxprF x)

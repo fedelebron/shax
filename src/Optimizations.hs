@@ -80,3 +80,7 @@ eliminateCommonSubexpressions (Definition name argTys binds rets) =
         e' = maybeRename <$> e
         maybeRename name | Just newName <- M.lookup name renames = newName
                          | otherwise = name
+
+
+materializeBroadcasts :: Definition -> Definition
+materializeBroadcasts = id
