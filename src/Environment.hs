@@ -1,4 +1,6 @@
-module Environment (Env, empty, insert, Environment.lookup, fromDefinition, nextName) where
+module Environment (Env, empty, insert,
+                   Environment.lookup, fromDefinition,
+                   toBindings, nextName) where
 
 import Types (VarName(..))
 import Binding ( Binding(Binding) )
@@ -35,6 +37,9 @@ fromDefinition :: Definition -> Env Binding
 fromDefinition = foldr (uncurry insert . bindingToPair) empty . defBinds
   where
     bindingToPair b@(Binding a _) = (a, b)
+
+toBindings :: Env Binding -> [Binding]
+toBindings = M.elems . fromMap
 
 -- Gives a variable name that isn't yet a key in this environment.
 nextName :: Env a -> VarName
