@@ -4,6 +4,7 @@ module BindingMonad where
 
 import qualified Environment as E
 import qualified Data.Map as M
+import Data.Either
 import qualified BiMap as B
 import Control.Lens hiding (op)
 import Control.Monad.State
@@ -59,6 +60,11 @@ walkBindings a f def =
       defBinds = binds,
       defRet = map (`maybeRename` remaps) (defRet def)
     }, state ^. extra)
+
+walkBindingsOrDie :: HasCallStack => a -> BindingMapper a -> Definition -> Definition
+walkBindingsOrDie = (((fst . fromRight err) .) .) . walkBindings
+  where
+    err = error "Internal error: Failed to walk bindings."
 
 maybeRename :: VarName -> RenameMap -> VarName
 maybeRename x = B.lookupValWithDefault x x

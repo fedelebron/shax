@@ -12,6 +12,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified BiMap as BM
 import qualified Environment as E
+import Data.List ((\\))
 import Data.Either (fromRight)
 import Data.Maybe (fromJust)
 import Text.PrettyPrint.HughesPJClass (prettyShow)
@@ -37,7 +38,11 @@ import Test.QuickCheck.Arbitrary.Generic
 import Test.QuickCheck
 import BindingMonad
 
-data OptimizationPass = DCE | CSE | ConstantFolding | MaterializeBroadcasts
+data OptimizationPass = DCE
+                        | CSE
+                        | ConstantFolding
+                        | MaterializeBroadcasts
+                        | CanonicalizeDotGeneral
   deriving (Show, Eq, Ord, Generic)
   deriving (Arbitrary) via GenericArbitrary OptimizationPass
 
@@ -46,6 +51,7 @@ applyPass DCE = eliminateDeadCode
 applyPass ConstantFolding = foldConstants
 applyPass CSE = eliminateCommonSubexpressions
 applyPass MaterializeBroadcasts = materializeBroadcasts
+applyPass CanonicalizeDotGeneral = canonicalizeDotGeneral
 
 applyPasses :: [OptimizationPass] -> Definition -> Definition
 applyPasses = foldr (.) id . map applyPass
@@ -97,9 +103,8 @@ eliminateCommonSubexpressions (Definition name argTys binds rets) =
 
 
 materializeBroadcasts :: HasCallStack => Definition -> Definition
-materializeBroadcasts = fst . fromRight err . walkBindings () broadcaster
+materializeBroadcasts = walkBindingsOrDie () broadcaster
   where
-    err = error "Internal error: Failed to materialize broadcasts."
     broadcaster :: BindingMapper ()
     broadcaster b@(Binding _ (ShaxprF mte op args)) =
       case (op, args) of
@@ -121,3 +126,36 @@ materializeBroadcasts = fst . fromRight err . walkBindings () broadcaster
                 newBind (ShaxprF mte op [x', y'])
             _ -> throwError (Error ("Failed to get type of operands in " ++ prettyShow b) callStack)
         _ -> keepBind b
+
+data DimOrder = LHS | RHS deriving Show
+canonicalizeDotGeneral :: Definition -> Definition
+canonicalizeDotGeneral = walkBindingsOrDie () canonicalizer
+  where
+    canonicalizer :: BindingMapper ()
+    canonicalizer b@(Binding _ (DotGeneralShaxprF ty dims x y)) = do
+      currentEnv <- use env
+      shx <- (tyShape . fromJust . bindType) <$> lift (E.lookup x currentEnv)
+      shy <- (tyShape . fromJust . bindType) <$> lift (E.lookup y currentEnv)
+      let DotDimensionNumbers lhsContractingIxs rhsContractingIxs lhsBatchIxs rhsBatchIxs = dims
+          lhsNonContractingIxs = getNonContracting shx lhsContractingIxs lhsBatchIxs
+          rhsNonContractingIxs = getNonContracting shy rhsContractingIxs rhsBatchIxs
+      x' <- transposeAndReshapeForMatmul LHS lhsContractingIxs lhsNonContractingIxs lhsBatchIxs shx x
+      y' <- transposeAndReshapeForMatmul RHS rhsContractingIxs rhsNonContractingIxs rhsBatchIxs shy y
+      undefined
+    canonicalizer x = keepBind x
+    transposeAndReshapeForMatmul :: DimOrder -> DimIxs -> DimIxs -> DimIxs -> Shape -> VarName -> BindingMonadComputation () VarName
+    transposeAndReshapeForMatmul dimOrder contracting nonContracting batch shx x = do
+        let permParts = case dimOrder of
+                          LHS -> [batch, nonContracting, contracting]
+                          RHS -> [batch, contracting, nonContracting]
+            perm = concat permParts
+            permutedShape = map (shx !!) perm
+            newShape = map (product . map (shx !!)) permParts
+        currentEnv <- use env
+        xBind <- lift (E.lookup x currentEnv)
+        let bt = tyBase (fromJust (bindType xBind))
+        x' <- newBind (TransposeShaxprF (Just (TensorType bt permutedShape)) perm x)
+        newBind (ReshapeShaxprF (Just (TensorType bt newShape)) newShape x')
+    getNonContracting sh contracting batch =
+      let allDims = [0 .. length sh - 1]
+      in  allDims \\ (batch ++ contracting)

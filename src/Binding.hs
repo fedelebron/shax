@@ -1,4 +1,4 @@
-module Binding(Binding(..)) where
+module Binding(Binding(..), bindType) where
 
 import Types
 import Shaxpr
@@ -18,3 +18,6 @@ instance Pretty Binding where
     where
       prettyType Nothing = text " :: *"
       prettyType (Just t) = text " :: " <> text (prettyShow t)
+
+bindType :: Binding -> Maybe TensorType
+bindType = exprTy . bindExpr
