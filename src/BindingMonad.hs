@@ -38,10 +38,8 @@ type BindingMonadComputation a r = StateT (BindingMonadState a) (Either Error) r
 -- A binding map that has extra state of type a.
 type BindingMapper a = Binding -> BindingMonadComputation a VarName
 
-makeInitialState :: a -> Definition -> BindingMonadState a
-makeInitialState a def =
-  let env = E.fromDefinition def
-  in BindingMonadState {
+makeInitialState :: a -> BindingMonadState a
+makeInitialState a = BindingMonadState {
     _env = E.empty,
     _remap = B.empty,
     _extra = a
@@ -49,17 +47,17 @@ makeInitialState a def =
 
 walkBindings :: a -> BindingMapper a -> Definition -> Either Error (Definition, a)
 walkBindings a f def =
-  let initialState = makeInitialState a def
+  let initialState = makeInitialState a
       makeBindings = mapM (wrapRenaming f) (defBinds def)
   in do
-    (binds, state) <- runStateT makeBindings initialState
-    let remaps = state ^. remap
-    let binds = toBindings (state ^. env)
+    (_, finalState) <- runStateT makeBindings initialState
+    let remaps = finalState ^. remap
+    let binds = toBindings (finalState ^. env)
     return (def {
-      defName = "d" ++ defName def,
+      defName = defName def,
       defBinds = binds,
       defRet = map (`maybeRename` remaps) (defRet def)
-    }, state ^. extra)
+    }, finalState ^. extra)
 
 walkBindingsOrDie :: HasCallStack => a -> BindingMapper a -> Definition -> Definition
 walkBindingsOrDie = (((fst . fromRight err) .) .) . walkBindings
@@ -93,3 +91,10 @@ newBind e = do
 
 keepBind :: Binding -> BindingMonadComputation a VarName
 keepBind = newBind . bindExpr
+
+getBindingType :: HasCallStack => VarName -> BindingMonadComputation a TensorType
+getBindingType v = do
+  vBind <- (>>= lift) (E.lookup v <$> use env)
+  case exprTy (bindExpr vBind) of
+    Just t -> return t
+    Nothing -> throwError (Error ("Failed to get type of variable " ++ prettyShow v) callStack)

@@ -64,7 +64,7 @@ linearize args def = do
   -- the _tangent_ program.
   rets <- mapM (`E.lookup` (finalState ^. primalValues)) (defRet def)
 
-  return (rets, tangentDef)  
+  return (rets, rename ("d" ++ defName def) tangentDef)  
 
 linearizeBinding :: HasCallStack => LinearMapper 
 linearizeBinding (Binding v e@(ShaxprF mty op args)) = do
@@ -181,9 +181,12 @@ balancedMinMask x y =
     GT -> 0.0
 
 isLinearFunc :: Op -> Bool
+isLinearFunc (UnaryPointwise Id) = True
 isLinearFunc (BinaryPointwise op) | op `elem` [Add, Sub] = True
 isLinearFunc (Param _) = True
 isLinearFunc (Reshape _) = True
 isLinearFunc (Broadcast _ _) = True
+isLinearFunc (Slice _ _) = True
+isLinearFunc (ReduceSum _) = True
 isLinearFunc (Transpose _) = True
 isLinearFunc _ = False

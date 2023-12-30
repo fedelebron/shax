@@ -37,6 +37,7 @@ library
       Linearize
       Optimizations
       Shaxpr
+      Transpose
       TypeInference
       Types
   other-modules:

@@ -7,7 +7,7 @@ import Binding
 import Control.Monad
 import Control.Monad.Except (MonadError, throwError)
 import Control.Monad.State
-import Data.List (sort)
+import Data.List (sort, (\\))
 import qualified Data.Map as M
 import Definition
 import Error
@@ -15,6 +15,7 @@ import GHC.Stack
 import Shaxpr
 import Text.PrettyPrint.HughesPJClass
 import Types
+import Debug.Trace
 
 type BindingState = M.Map VarName (ShaxprF VarName)
 
@@ -56,13 +57,27 @@ inferExprType paramTypes op argTys = case (op, argTys) of
       Just ty -> Right ty
   (Constant k, []) -> return (someArrayType k)
   (UnaryPointwise _, [x]) -> return x
-  (BinaryPointwise _, [x, y]) -> broadcastSemantics x y
+  (op@(BinaryPointwise _), [x, y]) -> do
+    traceM ("About to run broadcast semantics on " ++ prettyShow op ++ " " ++ prettyShow [x, y])
+    broadcastSemantics x y
   (Reshape sh, [TensorType bt sh']) -> do
     assertTrue (product sh == product sh') (Error ("Invalid reshape: " ++ show sh' ++ " -> " ++ show sh) callStack)
     return (TensorType bt sh)
   (Transpose ixs, [TensorType bt sh]) -> TensorType bt <$> applyPermutation ixs sh
   (Broadcast ixs shout, [TensorType bt shin]) -> do
-    assertTrue (all id [shout !! (ixs !! i) == shin !! i | i <- ixs]) $ Error ("Invalid broadcast: " ++ show shin ++ " -> " ++ show shout ++ " with ixs = " ++ show ixs) callStack
+    assertTrue (and [shout !! (ixs !! i) == shin !! i | i <- [0 .. length ixs - 1]]) $ Error ("Invalid broadcast: " ++ show shin ++ " -> " ++ show shout ++ " with ixs = " ++ show ixs) callStack
+    return (TensorType bt shout)
+  (Slice sixs eixs, [TensorType bt shin]) -> do
+    assertTrue (all (uncurry (<)) (zip sixs eixs)) $ Error ("Invalid start and end slice indices: " ++ show sixs ++ ", " ++ show eixs) callStack
+    assertTrue (all (>= 0) sixs) $ Error ("Invalid start indices for slice: " ++ show sixs) callStack
+    assertTrue (length sixs == length eixs) $ Error ("Start and end slice indices have different lengths: " ++ show sixs ++ ", " ++ show eixs) callStack
+    assertTrue (length sixs == length shin) $ Error ("Indices have rank different from operand: " ++ show sixs ++ ", " ++ show shin) callStack
+    assertTrue (all (uncurry (<=)) (zip eixs shin)) $ Error ("Slice end indices too large: " ++ show eixs ++ ", " ++ show shin) callStack
+    return (TensorType bt (zipWith (-) eixs sixs))
+  (ReduceSum ixs, [TensorType bt shin]) -> do
+    let allDimIxs = [0 .. length shin - 1]
+    assertTrue (all (`elem` allDimIxs) ixs) $ Error ("Invalid reduction indices: " ++ show ixs ++ " for reduction of shape " ++ show shin) callStack  
+    let shout = map (shin !!) (allDimIxs \\ ixs)
     return (TensorType bt shout)
   ( DotGeneral (DotDimensionNumbers lhsC rhsC lhsB rhsB),
     [TensorType b lhsSh, TensorType b' rhsSh]
@@ -84,8 +99,8 @@ inferExprType paramTypes op argTys = case (op, argTys) of
         Error ("Differing batch dimensions: " ++ show (lhsB', rhsB')) callStack
       let lhsContracting' = [lhsSh !! i | i <- lhsC]
           rhsContracting' = [rhsSh !! i | i <- rhsC]
-      assertTrue (lhsContracting' == rhsContracting') $
-        Error ("Differing contracting dimensions: " ++ show (lhsContracting', rhsContracting')) callStack
+      assertTrue (product lhsContracting' == product rhsContracting') $
+        Error ("Differing contracting dimension products: " ++ show (lhsContracting', rhsContracting')) callStack
       let lhsNonContracting =
             [ lhsSh !! i | i <- [0 .. lhsRank - 1], i `notElem` lhsB, i `notElem` lhsC
             ]
@@ -139,9 +154,12 @@ checkDefArgumentTypes args def =
   let argTys = map someArrayType args
       paramTys = defArgTys def
    in assertTrue (argTys == paramTys) $
-     Error ("Invalid argument types ("
-            ++ show argTys ++
-            ") when calling definition "
-            ++ defName def ++
-            ", which has parameter types "
-            ++ show paramTys) callStack
+        Error
+          ( "Invalid argument types ("
+              ++ show argTys
+              ++ ") when calling definition "
+              ++ defName def
+              ++ ", which has parameter types "
+              ++ show paramTys
+          )
+          callStack

@@ -1,6 +1,7 @@
 module Environment (Env, empty, insert,
                    Environment.lookup, fromDefinition,
-                   toBindings, nextName) where
+                   toBindings, nextName, alter,
+                   lookupWithDefault) where
 
 import Types (VarName(..))
 import Binding ( Binding(Binding) )
@@ -9,6 +10,7 @@ import Definition
 import Error
 import GHC.Stack
 import Text.PrettyPrint.HughesPJClass (Pretty (..), pPrint, prettyShow)
+import Data.Maybe (fromMaybe)
 
 -- A very thin wrapper aroud a map from variable names to something. This comes
 -- in handy quite often, as we map a variable to its binding, or a variable to
@@ -24,12 +26,18 @@ empty = Env M.empty
 insert :: VarName -> a -> Env a -> Env a
 insert k v = Env . M.insert k v . fromMap
 
+alter :: (Maybe a -> Maybe a) -> VarName -> Env a -> Env a
+alter f k = Env . M.alter f k . fromMap
+
 lookup :: (Pretty a, HasCallStack) => VarName -> Env a -> Either Error a
 lookup k env =
     maybe
         (Left $ Error ("Key " ++ show k ++ " not found in environment: " ++ prettyShow env) callStack)
         Right
         (M.lookup k (fromMap env))
+
+lookupWithDefault :: (Pretty a, HasCallStack) => VarName -> a -> Env a -> a
+lookupWithDefault k v env = fromMaybe v (M.lookup k (fromMap env))
 
 -- Returns a mapping from each variable in the body to its definition. Note this
 -- does not include (and indeed cannot include) procedure parameters.

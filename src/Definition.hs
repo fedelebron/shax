@@ -1,4 +1,4 @@
-module Definition(Definition(..), toDefinition) where
+module Definition(Definition(..), toDefinition, rename) where
 
 import Control.Monad.State
 import qualified Data.Map as M
@@ -49,3 +49,6 @@ toDefinition name tys fs =
                   defBinds = binds,
                   defRet = returnLabels
                  }
+
+rename :: String -> Definition -> Definition
+rename k def = def {defName = k}
