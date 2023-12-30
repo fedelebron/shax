@@ -187,6 +187,7 @@ isLinearFunc (Param _) = True
 isLinearFunc (Reshape _) = True
 isLinearFunc (Broadcast _ _) = True
 isLinearFunc (Slice _ _) = True
+isLinearFunc (Pad _ _) = True
 isLinearFunc (ReduceSum _) = True
 isLinearFunc (Transpose _) = True
 isLinearFunc _ = False

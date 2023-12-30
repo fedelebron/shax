@@ -15,13 +15,12 @@ import GHC.Stack
 import Shaxpr
 import Text.PrettyPrint.HughesPJClass
 import Types
-import Debug.Trace
 
 type BindingState = M.Map VarName (ShaxprF VarName)
 
 type BindingComputation = StateT BindingState (Either Error)
 
-inferTypes :: Definition -> Either Error Definition
+inferTypes :: HasCallStack => Definition -> Either Error Definition
 inferTypes defn = do
   let oldBinds = defBinds defn
       initialState = M.empty
@@ -31,14 +30,30 @@ inferTypes defn = do
   where
     paramTypes = M.fromList (zip [0 ..] (defArgTys defn))
     typeBind :: Binding -> BindingComputation ()
-    typeBind (Binding v ex@(ShaxprF mty op args)) = do
+    typeBind b@(Binding v ex@(ShaxprF mty op args)) = do
       s <- get
+
+      argTys <- lift $ mapM (lookupVariableType s) args
+      correctType <- prependToErrors ("While typing " ++ prettyShow b ++ ": ")
+                     . lift
+                     $ inferExprType paramTypes op argTys
+
       s' <- case mty of
-        Just _ -> return (M.insert v ex s)
-        Nothing -> do
-          argTys <- lift $ mapM (lookupVariableType s) args
-          ty <- lift $ inferExprType paramTypes op argTys
-          return $ M.insert v (ShaxprF (Just ty) op args) s
+        Just existingType ->
+          if existingType == correctType
+            then return (M.insert v ex s)
+            else
+              throwError $
+                Error
+                  ( "Invalid existing type for "
+                      ++ prettyShow b
+                      ++ ", was "
+                      ++ prettyShow existingType
+                      ++ ", but inferred type is "
+                      ++ show correctType
+                  )
+                  callStack
+        Nothing -> return $ M.insert v (ShaxprF (Just correctType) op args) s
       put s'
 
 lookupVariableType :: (HasCallStack) => BindingState -> VarName -> Either Error TensorType
@@ -49,7 +64,7 @@ lookupVariableType s vn = do
       Nothing -> Left $ Error ("Internal error! " ++ prettyShow e ++ " had no type!") callStack
       Just t -> Right t
 
-inferExprType :: M.Map Int TensorType -> Op -> [TensorType] -> Either Error TensorType
+inferExprType :: HasCallStack => M.Map Int TensorType -> Op -> [TensorType] -> Either Error TensorType
 inferExprType paramTypes op argTys = case (op, argTys) of
   (Param k, []) ->
     case M.lookup k paramTypes of
@@ -57,26 +72,40 @@ inferExprType paramTypes op argTys = case (op, argTys) of
       Just ty -> Right ty
   (Constant k, []) -> return (someArrayType k)
   (UnaryPointwise _, [x]) -> return x
-  (op@(BinaryPointwise _), [x, y]) -> do
-    traceM ("About to run broadcast semantics on " ++ prettyShow op ++ " " ++ prettyShow [x, y])
-    broadcastSemantics x y
+  (op@(BinaryPointwise _), [x, y]) -> broadcastSemantics x y
   (Reshape sh, [TensorType bt sh']) -> do
     assertTrue (product sh == product sh') (Error ("Invalid reshape: " ++ show sh' ++ " -> " ++ show sh) callStack)
     return (TensorType bt sh)
-  (Transpose ixs, [TensorType bt sh]) -> TensorType bt <$> applyPermutation ixs sh
+  (Transpose ixs, [TensorType bt sh]) -> do
+    assertTrue (length ixs == length sh) $ Error ("Invalid transposition indices " ++ show ixs ++ " for argument with shape " ++ show sh) callStack 
+    assertTrue (sort ixs == [0 .. length sh - 1]) $ Error ("Invalid transposition indices, not a permutation: " ++ show ixs) callStack
+    TensorType bt <$> applyPermutation ixs sh
   (Broadcast ixs shout, [TensorType bt shin]) -> do
-    assertTrue (and [shout !! (ixs !! i) == shin !! i | i <- [0 .. length ixs - 1]]) $ Error ("Invalid broadcast: " ++ show shin ++ " -> " ++ show shout ++ " with ixs = " ++ show ixs) callStack
+    assertTrue (and [shout !! (ixs !! i) == shin !! i | i <- [0 .. length ixs - 1]]) $
+      Error ("Invalid broadcast: " ++ show shin ++ " -> " ++ show shout ++ " with ixs = " ++ show ixs) callStack
     return (TensorType bt shout)
   (Slice sixs eixs, [TensorType bt shin]) -> do
-    assertTrue (all (uncurry (<)) (zip sixs eixs)) $ Error ("Invalid start and end slice indices: " ++ show sixs ++ ", " ++ show eixs) callStack
+    assertTrue (all (uncurry (<)) (zip sixs eixs)) $
+      Error ("Invalid start and end slice indices: " ++ show sixs ++ ", " ++ show eixs) callStack
     assertTrue (all (>= 0) sixs) $ Error ("Invalid start indices for slice: " ++ show sixs) callStack
-    assertTrue (length sixs == length eixs) $ Error ("Start and end slice indices have different lengths: " ++ show sixs ++ ", " ++ show eixs) callStack
-    assertTrue (length sixs == length shin) $ Error ("Indices have rank different from operand: " ++ show sixs ++ ", " ++ show shin) callStack
-    assertTrue (all (uncurry (<=)) (zip eixs shin)) $ Error ("Slice end indices too large: " ++ show eixs ++ ", " ++ show shin) callStack
+    assertTrue (length sixs == length eixs) $
+      Error ("Start and end slice indices have different lengths: " ++ show sixs ++ ", " ++ show eixs) callStack
+    assertTrue (length sixs == length shin) $
+      Error ("Indices have rank different from operand: " ++ show sixs ++ ", " ++ show shin) callStack
+    assertTrue (all (uncurry (<=)) (zip eixs shin)) $
+      Error ("Slice end indices too large: " ++ show eixs ++ ", " ++ show shin) callStack
     return (TensorType bt (zipWith (-) eixs sixs))
+  (Pad lohi _, [TensorType bt shin]) -> do
+    assertTrue (length lohi == length shin) $
+      Error
+        ("Mus have exactly one padding lo, hi for each dimension, got " ++ show lohi ++ " for shape " ++ show shin)
+        callStack
+    let shout = zipWith (+) shin (map (uncurry (+)) lohi)
+    return (TensorType bt shout)
   (ReduceSum ixs, [TensorType bt shin]) -> do
     let allDimIxs = [0 .. length shin - 1]
-    assertTrue (all (`elem` allDimIxs) ixs) $ Error ("Invalid reduction indices: " ++ show ixs ++ " for reduction of shape " ++ show shin) callStack  
+    assertTrue (all (`elem` allDimIxs) ixs) $
+      Error ("Invalid reduction indices: " ++ show ixs ++ " for reduction of shape " ++ show shin) callStack
     let shout = map (shin !!) (allDimIxs \\ ixs)
     return (TensorType bt shout)
   ( DotGeneral (DotDimensionNumbers lhsC rhsC lhsB rhsB),

@@ -16,6 +16,7 @@ class HNP a where
   broadcast :: DimIxs -> Shape -> a -> a
   transpose :: DimIxs -> a -> a
   slice :: DimIxs -> DimIxs -> a -> a
+  pad :: [(Int, Int)] -> Float -> a -> a
   reduceSum :: DimIxs -> a -> a
   dotGeneral :: DotDimensionNumbers -> a -> a -> a
   dot :: a -> a -> a
@@ -50,6 +51,10 @@ reduceSumArr ixs = wrapArrayOperation f
                 transposedIxs = (allDimIxs \\ ixs) ++ ixs
             in  D.rerank (rank - length ixs) (D.reduce (+) 0) (D.transpose transposedIxs arr)
 
+padArr :: [(Int, Int)] -> Float -> SomeArray -> SomeArray
+padArr lohi val (FloatArray arr) = FloatArray (D.pad lohi val arr)
+padArr lohi val (IntArray arr) = IntArray (D.pad lohi (truncate val) arr)
+
 -- MM.matMul can't deal with Integer, so we wrap to and from Int64.
 -- Gross, I know.
 matMulArr3 :: SomeArray -> SomeArray -> SomeArray
@@ -65,6 +70,7 @@ instance HNP SomeArray where
   reshape = reshapeArr
   broadcast = broadcastArr
   slice = sliceArr
+  pad = padArr
   transpose = transposeArr
   reduceSum = reduceSumArr
                       
@@ -100,6 +106,7 @@ instance HNP Shaxpr where
   reshape = ((Shaxpr . Fix) .) . (. expr) . ReshapeShaxprF Nothing
   broadcast ixs sh x = Shaxpr . Fix $ BroadcastShaxprF Nothing ixs sh (expr x)
   slice sixs eixs x = Shaxpr . Fix $ SliceShaxprF Nothing sixs eixs (expr x)
+  pad lohi val x = Shaxpr . Fix $ PadShaxprF Nothing lohi val (expr x)
   reduceSum ixs x = Shaxpr . Fix $ ReduceSumShaxprF Nothing ixs (expr x)
   transpose = ((Shaxpr . Fix) .) . (. expr) . TransposeShaxprF Nothing
   dotGeneral d x y = Shaxpr . Fix $ DotGeneralShaxprF Nothing d (expr x) (expr y)

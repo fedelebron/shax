@@ -36,6 +36,7 @@ module Shaxpr
     pattern BroadcastShaxprF,
     pattern ReduceSumShaxprF,
     pattern SliceShaxprF,
+    pattern PadShaxprF,
     pattern TransposeShaxprF,
     pattern DotGeneralShaxprF,
   )
@@ -88,7 +89,10 @@ data Op
   | Reshape Shape
   | Broadcast DimIxs Shape
   | ReduceSum DimIxs
-  | Slice DimIxs DimIxs -- TODO: Support strides.
+  -- TODO: Support strides.
+  | Slice DimIxs DimIxs 
+  -- TODO: Gross: If the argument an integer tensor, truncates the Float.
+  | Pad [(Int, Int)] Float 
   | Transpose DimIxs
   | DotGeneral DotDimensionNumbers
   deriving (Show, Eq, Ord)
@@ -105,6 +109,7 @@ instance Pretty Op where
   pPrintPrec _ _ (Transpose ixs) = text $ "transpose " ++ show ixs
   pPrintPrec _ _ (Broadcast ixs sh) = text $ "broadcast " ++ show ixs ++ " " ++ show sh
   pPrintPrec _ _ (Slice sixs eixs) = text $ "slice " ++ show sixs ++ " " ++ show eixs
+  pPrintPrec _ _ (Pad lohi val) = text $ "pad " ++ show lohi ++ " " ++ show val
   pPrintPrec _ _ (ReduceSum ixs) = text $ "reduce_sum " ++ show ixs
   pPrintPrec _ _ (DotGeneral dims) = case dims of
     DotDimensionNumbers [1] [0] [] [] -> text "dot"
@@ -187,6 +192,9 @@ pattern ReduceSumShaxprF ty ixs x = ShaxprF ty (ReduceSum ixs) [x]
 
 pattern SliceShaxprF :: Maybe TensorType -> DimIxs -> DimIxs -> a -> ShaxprF a
 pattern SliceShaxprF ty sixs eixs x = ShaxprF ty (Slice sixs eixs) [x]
+
+pattern PadShaxprF :: Maybe TensorType -> [(Int, Int)] -> Float -> a -> ShaxprF a
+pattern PadShaxprF ty lohi val x = ShaxprF ty (Pad lohi val) [x]
 
 pattern TransposeShaxprF :: Maybe TensorType -> DimIxs -> a -> ShaxprF a
 pattern TransposeShaxprF ty ixs x = ShaxprF ty (Transpose ixs) [x]

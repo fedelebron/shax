@@ -39,8 +39,6 @@ import Test.QuickCheck.Arbitrary.Generic
 import Text.PrettyPrint.HughesPJClass (prettyShow)
 import Types
 
-import Debug.Trace
-
 data OptimizationPass
   = DCE
   | CSE
@@ -186,8 +184,8 @@ lowerReductionsToSumsOfSlices = walkBindingsOrDie () lower
     lower b@(Binding _ (ReduceSumShaxprF mty ixs x))
       | Just (TensorType bt sh) <- mty = do
          TensorType _ sh' <- getBindingType x
-         traceM ("About to reduce shape " ++ show sh' ++ " at indices " ++ show ixs)
          v <- go bt sh' ixs x
+         -- TODO: This need only be a squeeze, not a full reshape.
          newBind (ReshapeShaxprF mty sh v)
     lower x = keepBind x
     go bt _ [] x = return x

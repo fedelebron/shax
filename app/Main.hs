@@ -55,31 +55,34 @@ main' hs p dx ct = do
     putStrLn "Evaluation:"
     print (evalDefinition d' p)
 
-    let d'' = materializeBroadcasts (canonicalizeDotGeneral d')
+    d'' <- rightOrDie (inferTypes (materializeBroadcasts (canonicalizeDotGeneral d')))
     putStrLn "After BM + CDG: "
     putStrLn (showDef 2 d'')
 
     (v, dg) <- rightOrDie (linearize p d'')
+    dg' <- rightOrDie (inferTypes dg)
     putStrLn "After linearizing:"
-    putStrLn (showDef 2 dg)
+    putStrLn (showDef 2 dg')
     putStrLn "Evaluation of primal during linearization:"
     print v
     putStrLn "Evaluation of linearized:"
-    print (evalDefinition dg dx)
+    print (evalDefinition dg' dx)
 
     let csedg = lowerReductionsToSumsOfSlices
                 . foldConstants 
                 . eliminateCommonSubexpressions
-                $ dg
+                $ dg'
     putStrLn "After LR + CF + CSE:"
     putStrLn (showDef 2 csedg)
+    csedg' <- rightOrDie (inferTypes csedg)
 
-    dgt <- rightOrDie (transposeDef csedg)
+    dgt <- eliminateDeadCode <$> rightOrDie (transposeDef csedg')
     putStrLn "Transposed linearized:"
     putStrLn (showDef 2 dgt)
+    dgt' <- rightOrDie (inferTypes dgt)
 
-    putStrLn "Evaluate transposed (at the dual of the linearization point)"
-    print (evalDefinition dgt p)
+    putStrLn "Evaluate transposed at cotangent:"
+    print (evalDefinition dgt ct)
 
 main1 :: IO ()
 main1 = let p = [FloatArray (D.fromList [] [1.5]),
@@ -132,7 +135,7 @@ hard x0 x8 = let x1 = broadcast [1] [2, 6] x0
 main5 :: IO ()
 main5 = let x1 = FloatArray (D.fromList [6] [1 .. 6])
             x8 = FloatArray (D.fromList [2,2] [1 .. 4])
-            ct = FloatArray (D.fromList [2,2] [1 .. 4])
+            ct = FloatArray (D.fromList [2] [1 .. 2])
         in  main' (close (hard @Shaxpr)) [x1, x8] [x1, x8] [ct]
 
 main = main5

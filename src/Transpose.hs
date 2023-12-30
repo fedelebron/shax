@@ -5,9 +5,10 @@ module Transpose where
 
 import Control.Monad.State
 import Control.Lens hiding (op)
-import Data.List (sort)
+import Data.List (sort, (\\))
 import GHC.Stack
 import Data.Maybe
+
 import qualified Data.Map as M
 import Control.Monad.State
 import Text.PrettyPrint.HughesPJClass (prettyShow)
@@ -21,7 +22,6 @@ import Error
 import Shaxpr
 import Definition
 import Control.Monad.Except (throwError)
-import Debug.Trace
 import Control.Arrow (second)
 
 
@@ -49,7 +49,6 @@ type CotangentComputation a = StateT CotangentState (Either Error) a
 
 addCotangent :: TangentVarName -> CotangentVarName -> CotangentComputation ()
 addCotangent v ct = cannotFail $ do
-  traceM ("Tangent variable " ++ prettyShow v ++ " has " ++ prettyShow ct ++ " as a cotangent summand.")
   cotangentSummandsMap %= E.alter (\case
                             Nothing -> Just [ct]
                             Just as -> Just (ct:as)) v
@@ -127,7 +126,6 @@ transposeDef def@(Definition name paramTys binds rets) = do
 
 transposeBinding :: Binding -> CotangentComputation ()
 transposeBinding (Binding v (ConstantShaxprF _ _)) = do
-  traceM ("[TRANSPOSE] Ignoring constant binding " ++ prettyShow v)
   -- Constants were hoisted to the top of the dual program already, and 
   -- they never propagate cotangents (they have no predecessors in the linear
   -- program), so there's nothing to do.
@@ -138,7 +136,6 @@ transposeBinding (Binding v (ShaxprF mty op args)) = do
     -- creation of variable v. At this point we'll write down the
     -- cotangent of v as the sum of all its cotangent summands.
     ctVars <- cannotFail $ maybeGetCotangentSummands v
-    traceM ("[TRANSPOSE] ctVars for " ++ prettyShow v ++ ": " ++ prettyShow ctVars)
     cotangent <- case ctVars of
       -- The primal parameters (dual returns) are their own cotangents.
       -- Since we don't want to say "x = id x" for them, we skip them.
@@ -186,7 +183,6 @@ appendCotangents dLdZ mty (BinaryPointwise Mul) [x, y] = do
   -- dual program. This is the same value, but the constant may have been
   -- renamed in the dual program, so we possibly rename it.
   x' <- maybeRenameConstant x
-  traceM ("Renamed " ++ prettyShow x ++ " to " ++ prettyShow x')
   ct <- addCotangentBinding (MulShaxprF mty x' dLdZ)
   addCotangent y ct
 appendCotangents dLdZ mty (Reshape sh') [x] = do
@@ -197,6 +193,21 @@ appendCotangents dLdZ mty (Transpose perm) [x] = do
   tx <- getOriginalVarType x
   -- If Z = transpose p X, then dL/dX = transpose p^{-1} dL/dZ.
   ct <- addCotangentBinding (TransposeShaxprF (Just tx) (inversePerm perm) dLdZ)
+  addCotangent x ct
+appendCotangents dLdZ mty (Slice sixs eixs) [x]
+    | Just (TensorType bt shout) <- mty = do
+  t@(TensorType _ shin) <- getOriginalVarType x
+  let lo = sixs
+      hi = zipWith (-) shin eixs
+  ct <- addCotangentBinding (PadShaxprF (Just t) (zip lo hi) 0.0 dLdZ)
+  addCotangent x ct
+appendCotangents dLdZ _ (Broadcast ixs shout) [x] = do
+  t@(TensorType bt shin) <- getOriginalVarType x
+  let rank = length shout
+      allOutputDimIxs = [0 .. rank - 1]
+      broadcastedDimIxs = allOutputDimIxs \\ ixs
+      mty = Just (TensorType bt shin)
+  ct <- addCotangentBinding (ReduceSumShaxprF mty broadcastedDimIxs dLdZ)
   addCotangent x ct
 appendCotangents dLdZ mty (DotGeneral (DotDimensionNumbers [2] [1] [0] [0])) [x, y] = do
   tx <- getOriginalVarType x
@@ -215,10 +226,10 @@ appendCotangents dLdZ mty (DotGeneral (DotDimensionNumbers [2] [1] [0] [0])) [x,
   y' <- maybeRenameConstant y
   -- A calculation best done over a glass of scotch yields:
   -- If Z = XY, then dL/dX = dL/dZ Y^T, dL/dY = X^T dL/dZ.
-  yt <- addCotangentBinding (TransposeShaxprF (Just (TensorType bt [b, p, m])) [1, 0] y')
+  yt <- addCotangentBinding (TransposeShaxprF (Just (TensorType bt [b, p, m])) [0, 2, 1] y')
   dLdzyt <- addCotangentBinding (DotGeneralShaxprF (Just tx) (DotDimensionNumbers [2] [1] [0] [0]) dLdZ yt)
   addCotangent x dLdzyt
-  xt <- addCotangentBinding (TransposeShaxprF (Just (TensorType bt [b, m, n])) [1, 0] x')
+  xt <- addCotangentBinding (TransposeShaxprF (Just (TensorType bt [b, m, n])) [0, 2, 1] x')
   xtdLdz <- addCotangentBinding (DotGeneralShaxprF (Just ty) (DotDimensionNumbers [2] [1] [0] [0]) xt dLdZ)
   addCotangent y xtdLdz
 appendCotangents _ _ op _ = error $ "Unimplemented transpose of " ++ show op
