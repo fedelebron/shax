@@ -26,7 +26,6 @@ import qualified Data.Array.Dynamic as D
 import qualified BiMap as B
 import Control.Monad.Except (throwError)
 import Text.PrettyPrint.HughesPJClass (Pretty, pPrintPrec, pPrint, prettyShow, vcat)
-import Debug.Trace
 
 import Control.Monad
 import Eval (evalFunc, evalDefinition)
@@ -109,7 +108,6 @@ evalLinearizedDefinition :: LinearizedDefinition -> [SomeArray] -> [SomeArray] -
 evalLinearizedDefinition def x dx = do
   allRet <- evalDefinition (nonlinear def) x
   let (y, env) = splitAt (length allRet - envSize def) allRet
-  -- traceM ("Passing parameters: dx:\n" ++ prettyShow dx ++ "\nEnv:\n" ++ prettyShow env)
   dy <- evalDefinition (linear def) (dx ++ env)
   return (y, dy)
 
