@@ -81,6 +81,6 @@ main = do
   result <- runExceptT $ gradientDescent (GradientDescentOpts {iters = 39, alpha = 0.05}) p typedDef
   case result of
     Right (minParam, minVal) -> do
-      print ("Minimum location: " ++ show minParam)
-      print ("Minimum value: " ++ show minVal)
+      putStrLn ("Minimum location: " ++ show minParam)
+      putStrLn ("Minimum value: " ++ show minVal)
     Left err -> print err
