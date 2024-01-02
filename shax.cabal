@@ -36,6 +36,7 @@ library
       HNP
       Linearize
       Optimizations
+      Optimizers
       Shaxpr
       Transpose
       TypeInference
@@ -56,11 +57,12 @@ library
     , fin >=0.3
     , generic-arbitrary >=1.0.1
     , lens >=5.2.3
-    , mtl >=2.2.2
+    , mtl >=2.3.1
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0
     , pretty >=1.1.3.6
     , recursion-schemes >=5.2.2.5
+    , transformers >=0.6.1.1
   default-language: Haskell2010
 
 executable shax-exe
@@ -81,12 +83,13 @@ executable shax-exe
     , fin >=0.3
     , generic-arbitrary >=1.0.1
     , lens >=5.2.3
-    , mtl >=2.2.2
+    , mtl >=2.3.1
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0
     , pretty >=1.1.3.6
     , recursion-schemes >=5.2.2.5
     , shax
+    , transformers >=0.6.1.1
   default-language: Haskell2010
 
 test-suite shax-test
@@ -109,10 +112,11 @@ test-suite shax-test
     , fin >=0.3
     , generic-arbitrary >=1.0.1
     , lens >=5.2.3
-    , mtl >=2.2.2
+    , mtl >=2.3.1
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0
     , pretty >=1.1.3.6
     , recursion-schemes >=5.2.2.5
     , shax
+    , transformers >=0.6.1.1
   default-language: Haskell2010

@@ -25,7 +25,7 @@ dependencies:
 - orthotope-hmatrix >= 0.1.2.0
 - fin >= 0.3
 - containers >= 0.6.7
-- mtl >= 2.2.2
+- mtl >= 2.3.1
 - recursion-schemes >= 5.2.2.5
 - data-fix >= 0.3.2
 - deriving-compat >= 0.6.5
@@ -33,6 +33,7 @@ dependencies:
 - lens >= 5.2.3
 - QuickCheck >= 2.14.3
 - generic-arbitrary >= 1.0.1
+- transformers >= 0.6.1.1
 
 ghc-options:
 - -Wall

@@ -1,7 +1,7 @@
-module Environment (Env, empty, insert,
+module Environment (Env(..), empty, insert,
                    Environment.lookup, fromDefinition,
                    toBindings, nextName, alter,
-                   lookupWithDefault) where
+                   lookupWithDefault, keys, member) where
 
 import Types (VarName(..))
 import Binding ( Binding(Binding) )
@@ -36,6 +36,9 @@ lookup k env =
         Right
         (M.lookup k (fromMap env))
 
+member :: VarName -> Env a -> Bool
+member v = M.member v . fromMap 
+
 lookupWithDefault :: (Pretty a, HasCallStack) => VarName -> a -> Env a -> a
 lookupWithDefault k v env = fromMaybe v (M.lookup k (fromMap env))
 
@@ -46,9 +49,13 @@ fromDefinition = foldr (uncurry insert . bindingToPair) empty . defBinds
   where
     bindingToPair b@(Binding a _) = (a, b)
 
+
 toBindings :: Env Binding -> [Binding]
 toBindings = M.elems . fromMap
 
 -- Gives a variable name that isn't yet a key in this environment.
 nextName :: Env a -> VarName
 nextName = VarName . (+ 1) . maximum . (-1: ) .map unVarName . M.keys . fromMap
+
+keys :: Env a -> [VarName]
+keys = M.keys . fromMap

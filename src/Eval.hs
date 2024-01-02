@@ -13,6 +13,8 @@ import HNP
 import Shaxpr
 import Text.PrettyPrint.HughesPJClass
 import Types
+import Debug.Trace
+
 
 wrapBroadcastSemantics ::
   (HasCallStack) => (SomeArray -> SomeArray -> SomeArray) -> Fix ShaxprF -> Fix ShaxprF -> SomeArray
@@ -76,6 +78,7 @@ evalDefinition defn args = do
     bindTypeMap = M.fromList $ map (\b -> (bindLabel b, exprTy (bindExpr b))) (defBinds defn)
     runBind :: Binding -> BindingComputation ()
     runBind bb@(Binding v (ShaxprF ty op args')) = do
+      --traceM ("About to evaluate " ++ prettyShow bb)
       s <- get
       args'' <- lift $ mapM (argToConstantShaxprF s) args'
       arr <-
@@ -85,6 +88,7 @@ evalDefinition defn args = do
             Just arr -> return arr
           _ -> return $ evalShaxprF (Fix (ShaxprF ty op args''))
       let s' = M.insert v arr s
+      --traceM ("Evaluated " ++ prettyShow bb ++ ":\n" ++ prettyShow arr)
       put s'
     argToConstantShaxprF :: BindingState -> VarName -> Either Error (Fix ShaxprF)
     argToConstantShaxprF s v = case (M.lookup v s, M.lookup v bindTypeMap) of
