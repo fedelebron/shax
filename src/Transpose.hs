@@ -55,7 +55,7 @@ type CotangentComputation a = StateT CotangentState (Either Error) a
 
 addCotangent :: TangentVarName -> CotangentVarName -> CotangentComputation ()
 addCotangent v ct = cannotFail $ do
-  traceM ("  Appended cotangent " ++ prettyShow ct ++ " to the cotangent summands of " ++ prettyShow v)
+  -- traceM ("  Appended cotangent " ++ prettyShow ct ++ " to the cotangent summands of " ++ prettyShow v)
   cotangentSummandsMap %= E.alter (\case
                             Nothing -> Just [ct]
                             Just as -> Just (ct:as)) v
@@ -65,7 +65,7 @@ addCotangentBinding :: ShaxprF CotangentVarName -> CotangentComputation VarName
 addCotangentBinding e = cannotFail $ do
     v <- E.nextName <$> use env
     env %= E.insert v (Binding v e)
-    traceM ("  Created cotangent binding " ++ render (pPrintPrec (PrettyLevel 2) 1 (Binding v e)))
+    -- traceM ("  Created cotangent binding " ++ render (pPrintPrec (PrettyLevel 2) 1 (Binding v e)))
 
     return v
 
@@ -106,11 +106,11 @@ transposeDef linearizedDefinition = do
   -- Note in the linear program, the first parameters correspond to tangent vectors for the
   -- primal program's parameters, while the rest of the parameters correspond to environment
   -- variables passed in from the primal program.
-  traceM ("envSize = " ++ show envSize)
+  -- traceM ("envSize = " ++ show envSize)
   let numTangentParams = length (defArgTys linearDef) - envSize
       numTangentReturns = length (defRet linearDef)
       isTangentVectorParamIndex k = k < numTangentParams
-  traceM ("I think there will be " ++ show numTangentReturns ++ " cotangents incoming.")
+  -- traceM ("I think there will be " ++ show numTangentReturns ++ " cotangents incoming.")
   let paramReads = M.fromList [(i, (v, t)) | Binding v (ParamShaxprF t i) <- defBinds linearDef,
                                              isTangentVectorParamIndex i]
   assertTrue (M.keys paramReads == [0 .. numTangentParams - 1]) $
@@ -124,7 +124,7 @@ transposeDef linearizedDefinition = do
                          Just xs -> Right xs
                          Nothing -> Left (Error "Failed to get type of return values." callStack)
   let numCotangents = length linearRetTypes
-  traceM ("I think there are " ++ show numCotangents ++ " cotangents incoming.")
+  -- traceM ("I think there are " ++ show numCotangents ++ " cotangents incoming.")
   -- For simplicity, we hoist all cotangent parameter reads, environment parameter
   -- reads, and constants, to the top of the dual program.
   --
@@ -139,9 +139,9 @@ transposeDef linearizedDefinition = do
       environmentParamReads = [Binding (VarName i) (ParamShaxprF t i) | (i, t) <- M.elems environmentReads] 
       environmentParamTypes = map (fromJust . exprTy . bindExpr) environmentParamReads
       environmentRenameMap = E.Env (fmap (VarName . fst) environmentReads)
-  traceM ("I think there are " ++ show nEnvReads ++ " environment reads, and they are:")
-  forM_ environmentParamReads (traceM . prettyShow)
-  traceM ("The environment rename map is:\n" ++ prettyShow environmentRenameMap)
+  -- ("I think there are " ++ show nEnvReads ++ " environment reads, and they are:")
+  -- forM_ environmentParamReads (traceM . prettyShow)
+  -- traceM ("The environment rename map is:\n" ++ prettyShow environmentRenameMap)
   -- We will have one dual program constant for each linear program constant. Note these will
   -- usually be zero, unless we're checkpointing, in which case we're effectively putting part
   -- of the primal program in the dual program.
@@ -194,7 +194,7 @@ transposeBinding b@(Binding v (ShaxprF mty op args)) = do
     -- creation of variable v. At this point we'll write down the
     -- cotangent of v as the sum of all its cotangent summands.
     ctVars <- cannotFail $ maybeGetCotangentSummands v
-    traceM ("Transposing " ++ prettyShow b ++ ", cotangents are " ++ prettyShow ctVars)
+    -- traceM ("Transposing " ++ prettyShow b ++ ", cotangents are " ++ prettyShow ctVars)
     case ctVars of
       -- The primal parameters (dual returns) are their own cotangents.
       -- Since we don't want to say "x = id x" for them, we skip them.
@@ -244,7 +244,7 @@ appendCotangents dLdZ mty (BinaryPointwise Mul) [x, y] = do
   -- dual program. This is the same value, but the constant may have been
   -- renamed in the dual program, so we possibly rename it.
   x' <- maybeRename x
-  traceM ("I'm adding a multiplication of " ++ prettyShow x' ++ " and " ++ prettyShow dLdZ ++ ", when walking backwards on linear binding " ++ prettyShow x ++ " * " ++ prettyShow y)
+  -- traceM ("I'm adding a multiplication of " ++ prettyShow x' ++ " and " ++ prettyShow dLdZ ++ ", when walking backwards on linear binding " ++ prettyShow x ++ " * " ++ prettyShow y)
   ct <- addCotangentBinding (MulShaxprF mty x' dLdZ)
   addCotangent y ct
 appendCotangents dLdZ mty (Reshape sh') [x] = do

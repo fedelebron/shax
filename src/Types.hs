@@ -50,6 +50,10 @@ toFloatList :: SomeArray -> [Float]
 toFloatList (IntArray _) = error "Cannot get a float list from an int array."
 toFloatList (FloatArray arr) = D.toList arr
 
+toFloatScalar :: SomeArray -> Float
+toFloatScalar (IntArray _) = error "Cannot get a float scalar from an int array."
+toFloatScalar (FloatArray arr) = D.unScalar arr
+
 someArrayType :: SomeArray -> TensorType
 someArrayType (FloatArray arr) = TensorType TFloat (D.shapeL arr)
 someArrayType (IntArray arr) = TensorType TInt (D.shapeL arr)
