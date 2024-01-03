@@ -31,7 +31,8 @@ broadcastArr :: [Int] -> Shape -> Tensor -> Tensor
 broadcastArr dims sh = wrapArrayOperation (D.broadcast dims sh)
 
 sliceArr :: DimIxs -> DimIxs -> Tensor -> Tensor
-sliceArr sixs eixs = wrapArrayOperation (D.slice (zip sixs eixs))
+sliceArr sixs eixs = let axisLengths = zipWith (-) eixs sixs
+                     in  wrapArrayOperation (D.slice (zip sixs axisLengths))
 
 stretchArr :: Shape -> Tensor -> Tensor
 stretchArr sh = wrapArrayOperation (D.stretch sh)

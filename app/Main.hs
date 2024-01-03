@@ -29,7 +29,7 @@ rightOrDie :: (Show e) => Either e a -> IO a
 rightOrDie (Right x) = return x
 rightOrDie (Left e) = error (show e)
 
-medium :: forall a. (HNP a, Ord a, Floating a) => a -> a -> a
+medium :: forall a. (HNP a, Floating a) => a -> a -> a
 medium x0 x8 =
         let x1 = broadcast [1] [2, 6] x0
             x2 = sin x1
@@ -39,17 +39,21 @@ medium x0 x8 =
             x6 = transpose [1, 0] x4
             x7 = x5 `dot` x6
             x9 = x7 * x8
-         in x9
+            x10 = reduceSum [0] x9
+         in x10
 
-demo :: IO ()
-demo = do
+linearizationDemo :: IO ()
+linearizationDemo = do
+  putStrLn "------------------\nLinearization demo\n------------------"
   let def = toDef "medium" [TensorType TFloat [6], TensorType TFloat [2, 2]] (close (medium @Shaxpr))
   putStrLn "After tracing:"
   putStrLn (showDef 2 def)
   typedDef <- rightOrDie (inferTypes def)
   putStrLn "After type inference:"
   putStrLn (showDef 2 typedDef)
-  let typedDef' = canonicalizeDotGeneral typedDef
+  let typedDef' = lowerReductionsToSumsOfSlices (canonicalizeDotGeneral typedDef)
+  putStrLn "After rewrites:"
+  putStrLn (showDef 2 typedDef')
   linearizedDef <- rightOrDie (linearize typedDef')
   putStrLn "Linearized definition(s):"
   putStrLn (showDef 2 linearizedDef)
@@ -62,7 +66,7 @@ demo = do
   transposedDef <- rightOrDie (transposeDef linearizedDef)
   putStrLn "Transposed definition(s):"
   putStrLn (showDef 2 transposedDef)
-  let ct = [FloatTensor (D.fromList [2, 2] [2 .. 5])]
+  let ct = [FloatTensor (D.fromList [2] [5, 9])]
   (yy, dct) <- rightOrDie (evalLinearizedDefinition transposedDef x ct)
   putStrLn "f(x) (again):"
   putStrLn (prettyShow yy)
@@ -73,8 +77,9 @@ demo = do
 f :: forall a. Floating a => a -> a -> a
 f x y = let z = x + y
         in sin z * cos z
-descent :: IO ()
-descent = do
+descentDemo :: IO ()
+descentDemo = do
+  putStrLn "---------------------\nGradient descent demo\n---------------------"
   let def = toDef "f" [TensorType TFloat [], TensorType TFloat []] (close (f @Shaxpr))
   let p = [FloatTensor (D.fromList [] [0.5]), FloatTensor (D.fromList [] [-0.75])]
   typedDef <- rightOrDie (inferTypes def)
@@ -87,4 +92,4 @@ descent = do
     Left err -> print err
 
 main :: IO ()
-main = demo
+main = descentDemo >> putStrLn "\n" >> linearizationDemo
