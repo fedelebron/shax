@@ -74,7 +74,7 @@ Minimum value: -0.5
 We can also see it perform tracing, type inference, linearization, and transposition:
 
 ```haskell
-medium :: forall a. (HNP a, Floating a) => a -> a -> a
+medium :: forall a. (HNP a, Ord a, Floating a) => a -> a -> a
 medium x0 x8 =
         let x1 = broadcast [1] [2, 6] x0
             x2 = sin x1
