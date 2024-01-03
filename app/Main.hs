@@ -15,6 +15,7 @@ import           Optimizers
 import           Shaxpr
 import           Text.PrettyPrint.HughesPJClass (Pretty, PrettyLevel(..)
                                                , pPrintPrec, render, prettyShow)
+import           Tensor
 import           Transpose
 import           TypeInference
 import           Types
@@ -28,7 +29,7 @@ rightOrDie :: (Show e) => Either e a -> IO a
 rightOrDie (Right x) = return x
 rightOrDie (Left e) = error (show e)
 
-medium :: forall a. (HNP a, Floating a) => a -> a -> a
+medium :: forall a. (HNP a, Ord a, Floating a) => a -> a -> a
 medium x0 x8 =
         let x1 = broadcast [1] [2, 6] x0
             x2 = sin x1
@@ -42,7 +43,7 @@ medium x0 x8 =
 
 demo :: IO ()
 demo = do
-  let def = toDefinition "medium" [TensorType TFloat [6], TensorType TFloat [2, 2]] (close (medium @Shaxpr))
+  let def = toDef "medium" [TensorType TFloat [6], TensorType TFloat [2, 2]] (close (medium @Shaxpr))
   putStrLn "After tracing:"
   putStrLn (showDef 2 def)
   typedDef <- rightOrDie (inferTypes def)
@@ -52,7 +53,7 @@ demo = do
   linearizedDef <- rightOrDie (linearize typedDef')
   putStrLn "Linearized definition(s):"
   putStrLn (showDef 2 linearizedDef)
-  let x = [FloatArray (D.fromList [6] [1 .. 6]), FloatArray (D.fromList [2, 2] [1 .. 4])]
+  let x = [FloatTensor (D.fromList [6] [1 .. 6]), FloatTensor (D.fromList [2, 2] [1 .. 4])]
   (y, dy) <- rightOrDie (evalLinearizedDefinition linearizedDef x x)
   putStrLn "f(x):"
   putStrLn (prettyShow y)
@@ -61,7 +62,7 @@ demo = do
   transposedDef <- rightOrDie (transposeDef linearizedDef)
   putStrLn "Transposed definition(s):"
   putStrLn (showDef 2 transposedDef)
-  let ct = [FloatArray (D.fromList [2, 2] [2 .. 5])]
+  let ct = [FloatTensor (D.fromList [2, 2] [2 .. 5])]
   (yy, dct) <- rightOrDie (evalLinearizedDefinition transposedDef x ct)
   putStrLn "f(x) (again):"
   putStrLn (prettyShow yy)
@@ -72,10 +73,10 @@ demo = do
 f :: forall a. Floating a => a -> a -> a
 f x y = let z = x + y
         in sin z * cos z
-main :: IO ()
-main = do
-  let def = toDefinition "f" [TensorType TFloat [], TensorType TFloat []] (close (f @Shaxpr))
-  let p = [FloatArray (D.fromList [] [0.5]), FloatArray (D.fromList [] [-0.75])]
+descent :: IO ()
+descent = do
+  let def = toDef "f" [TensorType TFloat [], TensorType TFloat []] (close (f @Shaxpr))
+  let p = [FloatTensor (D.fromList [] [0.5]), FloatTensor (D.fromList [] [-0.75])]
   typedDef <- rightOrDie (inferTypes def)
   putStrLn (showDef 2 typedDef)
   result <- runExceptT $ gradientDescent (GradientDescentOpts {iters = 39, alpha = 0.05}) p typedDef
@@ -84,3 +85,6 @@ main = do
       putStrLn ("Minimum location: " ++ show minParam)
       putStrLn ("Minimum value: " ++ show minVal)
     Left err -> print err
+
+main :: IO ()
+main = demo

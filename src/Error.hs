@@ -4,9 +4,9 @@ module Error (Error (..), assertTrue, cannotFail, prependToErrors) where
 
 import Control.Monad.Except (MonadError, catchError, throwError)
 import Control.Monad.State
-import Data.Functor.Identity
+import Data.Functor.Identity ( Identity(runIdentity) )
 import GHC.Stack
-import Text.PrettyPrint.HughesPJClass (Pretty (..), pPrint, prettyShow, text)
+import Text.PrettyPrint.HughesPJClass (Pretty (..), pPrint, prettyShow, text, vcat)
 
 -- One can get a call stack by adding the type constraint HasCallStack to the
 -- function. That brings in an implicit variable named callStack :: CallStack.
@@ -17,7 +17,7 @@ data Error = Error
 
 instance Pretty Error where
     pPrint (Error msg trace) =
-        text msg <> text (prettyCallStack trace)
+        vcat [text msg, text (prettyCallStack trace)]
 
 instance Show Error where
     show = prettyShow
@@ -30,7 +30,7 @@ assertTrue x err = if x then pure () else throwError err
 cannotFail :: (MonadError e m) => StateT s Identity b -> StateT s m b
 cannotFail = mapStateT (pure . runIdentity)
 
-prependToErrors :: (HasCallStack, MonadError Error m) => String -> m a -> m a
+prependToErrors :: MonadError Error m => String -> m a -> m a
 prependToErrors s c = c `catchError` handler
     where
-        handler (Error s' cs) = throwError (Error (s ++ s') cs)
+        handler (Error s' cs) = throwError (Error (s ++ "\n" ++ s') cs)

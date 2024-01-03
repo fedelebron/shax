@@ -11,22 +11,20 @@ import Eval
 import Transpose
 import Types
 import Definition
-import Binding
+import Bind
 import Shaxpr
 import Error
-import Eval (evalDefinition)
-
+import Tensor
 
 data GradientDescentOpts = GradientDescentOpts {
   iters :: Int,
   alpha :: Float
 }
 
-gradientDescent :: HasCallStack => GradientDescentOpts -> [SomeArray] -> Definition -> ExceptT Error IO ([SomeArray], Float)
+gradientDescent :: HasCallStack => GradientDescentOpts -> [Tensor] -> Definition -> ExceptT Error IO ([Tensor], Float)
 gradientDescent opts initialParams def = do
   assertTrue (length (defRet def) == 1) $ Error "Cannot minimize a non-scalar function." callStack
-  let varRet = head (defRet def)
-  let shRet = tyShape $ head [t | Binding v (ShaxprF (Just t) _ _) <- defBinds def, v == varRet]
+  let shRet = tyShape . varType . head . defRet $ def
   assertTrue (product shRet == 1) $ Error "Cannot minimize a non-scalar function." callStack
 
   linearized <- except (linearize def)
@@ -38,9 +36,9 @@ gradientDescent opts initialParams def = do
     go i dft p = do
       (val, delta) <- except (evalLinearizedDefinition dft p [fromFloatScalar 1.0])
       let valScalar = toFloatScalar (head val)
-      lift (putStrLn ("Iteration " ++ show (n - i) ++ ": " ++ show valScalar))
+      lift (putStrLn ("Iteration " ++ show (n - i + 1) ++ ": " ++ show valScalar))
       if i == 0
-        then except (Right (p, valScalar))
+        then return (p, valScalar)
         else do
           let newParams = zipWith (-) p (map (* lr) delta)
           go (i - 1) dft newParams

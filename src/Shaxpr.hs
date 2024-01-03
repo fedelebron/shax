@@ -43,12 +43,13 @@ module Shaxpr
 where
 
 import Data.Array.Dynamic as D
+import Prelude hiding ((<>))
 import Data.Eq.Deriving
 import Data.Fix
 import Text.PrettyPrint.HughesPJClass
 import Text.Show.Deriving
 import Types
-import Prelude hiding ((<>))
+import Tensor
 
 data BinaryScalarOp = Add | Sub | Mul | Div | Min | Max deriving (Show, Eq, Ord)
 
@@ -83,7 +84,7 @@ instance Pretty DotDimensionNumbers where
 
 data Op
   = Param Int
-  | Constant SomeArray
+  | Constant Tensor
   | BinaryPointwise BinaryScalarOp
   | UnaryPointwise UnaryScalarOp
   | Reshape Shape
@@ -116,16 +117,15 @@ instance Pretty Op where
     _ -> text $ "dot_general " ++ prettyShow dims
 
 data ShaxprF rep = ShaxprF
-  { exprTy :: Maybe TensorType,
-    exprOp :: Op,
+  { exprOp :: Op,
     exprArgs :: [rep]
   }
   deriving (Show, Eq, Ord, Functor)
 
 instance (Pretty rep) => Pretty (ShaxprF rep) where
-  pPrintPrec _ _ (ShaxprF _ (BinaryPointwise op) [x, y]) = pPrint op <> text " " <> pPrint x <> text " " <> pPrint y
-  pPrintPrec _ _ (ShaxprF _ (UnaryPointwise op) [x]) = pPrint op <> text " " <> pPrint x
-  pPrintPrec k l (ShaxprF _ op xs) =
+  pPrintPrec _ _ (ShaxprF (BinaryPointwise op) [x, y]) = pPrint op <> text " " <> pPrint x <> text " " <> pPrint y
+  pPrintPrec _ _ (ShaxprF (UnaryPointwise op) [x]) = pPrint op <> text " " <> pPrint x
+  pPrintPrec k l (ShaxprF op xs) =
     let terms = pPrintPrec k l op : map (pPrintPrec k l) xs
      in mconcat (punctuate (text " ") terms)
 
@@ -138,105 +138,100 @@ newtype Shaxpr = Shaxpr
   deriving (Show, Eq)
 
 instance Pretty (Fix ShaxprF) where
+  pPrintPrec :: PrettyLevel -> Rational -> Fix ShaxprF -> Doc
   pPrintPrec k l (Fix x) = pPrintPrec k l x
 
 -- Helper patterns for matching on well-constructed expression trees.
 -- Note these are not technically complete, as in, there exist syntactically
 -- valid values of type Fix ShaxprF which are not matched by any of these
--- synonyms. For instance, `ShaxprF _ (Constant _) [_]`. This is
+-- synonyms. For instance, `ShaxprF (Constant _) [_]`. This is
 -- intentional.
-pattern ConstantShaxprF :: Maybe TensorType -> SomeArray -> ShaxprF a
-pattern ConstantShaxprF ty x = ShaxprF ty (Constant x) []
+pattern ConstantShaxprF :: Tensor -> ShaxprF a
+pattern ConstantShaxprF x = ShaxprF (Constant x) []
 
-pattern ParamShaxprF :: Maybe TensorType -> Int -> ShaxprF a
-pattern ParamShaxprF ty k = ShaxprF ty (Param k) []
+pattern ParamShaxprF :: Int -> ShaxprF a
+pattern ParamShaxprF k = ShaxprF (Param k) []
 
-pattern AddShaxprF :: Maybe TensorType -> a -> a -> ShaxprF a
-pattern AddShaxprF ty x y = ShaxprF ty (BinaryPointwise Add) [x, y]
+pattern AddShaxprF :: a -> a -> ShaxprF a
+pattern AddShaxprF x y = ShaxprF (BinaryPointwise Add) [x, y]
 
-pattern SubShaxprF :: Maybe TensorType -> a -> a -> ShaxprF a
-pattern SubShaxprF ty x y = ShaxprF ty (BinaryPointwise Sub) [x, y]
+pattern SubShaxprF :: a -> a -> ShaxprF a
+pattern SubShaxprF x y = ShaxprF (BinaryPointwise Sub) [x, y]
 
-pattern MulShaxprF :: Maybe TensorType -> a -> a -> ShaxprF a
-pattern MulShaxprF ty x y = ShaxprF ty (BinaryPointwise Mul) [x, y]
+pattern MulShaxprF :: a -> a -> ShaxprF a
+pattern MulShaxprF x y = ShaxprF (BinaryPointwise Mul) [x, y]
 
-pattern DivShaxprF :: Maybe TensorType -> a -> a -> ShaxprF a
-pattern DivShaxprF ty x y = ShaxprF ty (BinaryPointwise Div) [x, y]
+pattern DivShaxprF :: a -> a -> ShaxprF a
+pattern DivShaxprF x y = ShaxprF (BinaryPointwise Div) [x, y]
 
-pattern MinShaxprF :: Maybe TensorType -> a -> a -> ShaxprF a
-pattern MinShaxprF ty x y = ShaxprF ty (BinaryPointwise Min) [x, y]
+pattern MinShaxprF :: a -> a -> ShaxprF a
+pattern MinShaxprF x y = ShaxprF (BinaryPointwise Min) [x, y]
 
-pattern MaxShaxprF :: Maybe TensorType -> a -> a -> ShaxprF a
-pattern MaxShaxprF ty x y = ShaxprF ty (BinaryPointwise Max) [x, y]
+pattern MaxShaxprF :: a -> a -> ShaxprF a
+pattern MaxShaxprF x y = ShaxprF (BinaryPointwise Max) [x, y]
 
-pattern IdShaxprF :: Maybe TensorType -> a -> ShaxprF a
-pattern IdShaxprF ty x = ShaxprF ty (UnaryPointwise Id) [x]
+pattern IdShaxprF :: a -> ShaxprF a
+pattern IdShaxprF x = ShaxprF (UnaryPointwise Id) [x]
 
-pattern SinShaxprF :: Maybe TensorType -> a -> ShaxprF a
-pattern SinShaxprF ty x = ShaxprF ty (UnaryPointwise Sin) [x]
+pattern SinShaxprF :: a -> ShaxprF a
+pattern SinShaxprF x = ShaxprF (UnaryPointwise Sin) [x]
 
-pattern CosShaxprF :: Maybe TensorType -> a -> ShaxprF a
-pattern CosShaxprF ty x = ShaxprF ty (UnaryPointwise Cos) [x]
+pattern CosShaxprF :: a -> ShaxprF a
+pattern CosShaxprF x = ShaxprF (UnaryPointwise Cos) [x]
 
-pattern ExpShaxprF :: Maybe TensorType -> a -> ShaxprF a
-pattern ExpShaxprF ty x = ShaxprF ty (UnaryPointwise Exp) [x]
+pattern ExpShaxprF :: a -> ShaxprF a
+pattern ExpShaxprF x = ShaxprF (UnaryPointwise Exp) [x]
 
-pattern ReshapeShaxprF :: Maybe TensorType -> Shape -> a -> ShaxprF a
-pattern ReshapeShaxprF ty sh x = ShaxprF ty (Reshape sh) [x]
+pattern ReshapeShaxprF :: Shape -> a -> ShaxprF a
+pattern ReshapeShaxprF sh x = ShaxprF (Reshape sh) [x]
 
-pattern BroadcastShaxprF :: Maybe TensorType -> DimIxs -> Shape -> a -> ShaxprF a
-pattern BroadcastShaxprF ty ixs sh x = ShaxprF ty (Broadcast ixs sh) [x]
+pattern BroadcastShaxprF :: DimIxs -> Shape -> a -> ShaxprF a
+pattern BroadcastShaxprF ixs sh x = ShaxprF (Broadcast ixs sh) [x]
 
-pattern ReduceSumShaxprF :: Maybe TensorType -> DimIxs -> a -> ShaxprF a
-pattern ReduceSumShaxprF ty ixs x = ShaxprF ty (ReduceSum ixs) [x]
+pattern ReduceSumShaxprF :: DimIxs -> a -> ShaxprF a
+pattern ReduceSumShaxprF ixs x = ShaxprF (ReduceSum ixs) [x]
 
-pattern SliceShaxprF :: Maybe TensorType -> DimIxs -> DimIxs -> a -> ShaxprF a
-pattern SliceShaxprF ty sixs eixs x = ShaxprF ty (Slice sixs eixs) [x]
+pattern SliceShaxprF :: DimIxs -> DimIxs -> a -> ShaxprF a
+pattern SliceShaxprF sixs eixs x = ShaxprF (Slice sixs eixs) [x]
 
-pattern PadShaxprF :: Maybe TensorType -> [(Int, Int)] -> Float -> a -> ShaxprF a
-pattern PadShaxprF ty lohi val x = ShaxprF ty (Pad lohi val) [x]
+pattern PadShaxprF :: [(Int, Int)] -> Float -> a -> ShaxprF a
+pattern PadShaxprF lohi val x = ShaxprF (Pad lohi val) [x]
 
-pattern TransposeShaxprF :: Maybe TensorType -> DimIxs -> a -> ShaxprF a
-pattern TransposeShaxprF ty ixs x = ShaxprF ty (Transpose ixs) [x]
+pattern TransposeShaxprF :: DimIxs -> a -> ShaxprF a
+pattern TransposeShaxprF ixs x = ShaxprF (Transpose ixs) [x]
 
-pattern SignumShaxprF :: Maybe TensorType -> a -> ShaxprF a
-pattern SignumShaxprF ty x = ShaxprF ty (UnaryPointwise Signum) [x]
+pattern SignumShaxprF :: a -> ShaxprF a
+pattern SignumShaxprF x = ShaxprF (UnaryPointwise Signum) [x]
 
-pattern NegateShaxprF :: Maybe TensorType -> a -> ShaxprF a
-pattern NegateShaxprF ty x = ShaxprF ty (UnaryPointwise Negate) [x]
+pattern NegateShaxprF :: a -> ShaxprF a
+pattern NegateShaxprF x = ShaxprF (UnaryPointwise Negate) [x]
 
-pattern DotGeneralShaxprF :: Maybe TensorType -> DotDimensionNumbers -> a -> a -> ShaxprF a
-pattern DotGeneralShaxprF ty dims x y = ShaxprF ty (DotGeneral dims) [x, y]
+pattern DotGeneralShaxprF :: DotDimensionNumbers -> a -> a -> ShaxprF a
+pattern DotGeneralShaxprF dims x y = ShaxprF (DotGeneral dims) [x, y]
 
-arrayTensorType :: SomeArray -> TensorType
-arrayTensorType (FloatArray arr) = TensorType TFloat (D.shapeL arr)
-arrayTensorType (IntArray arr) = TensorType TInt (D.shapeL arr)
-
-fromConstant :: SomeArray -> Shaxpr
-fromConstant arr = Shaxpr . Fix $ ConstantShaxprF (Just $ arrayTensorType arr) arr
+fromConstant :: Tensor -> Shaxpr
+fromConstant arr = Shaxpr . Fix $ ConstantShaxprF arr
 
 instance Num Shaxpr where
-  -- (+) = (Shaxpr . Fix) . (. unFix . expr) . AddShaxprF Nothing . unFix . expr
-  -- (+) = ((Shaxpr . Fix) .) . (. unFix . expr) . AddShaxprF Nothing . unFix . expr
-  (+) = ((Shaxpr . Fix) .) . (. expr) . AddShaxprF Nothing . expr
-  (-) = ((Shaxpr . Fix) .) . (. expr) . SubShaxprF Nothing . expr
-  (*) = ((Shaxpr . Fix) .) . (. expr) . MulShaxprF Nothing . expr
-  fromInteger = fromConstant . IntArray . D.fromList [] . return
-  signum = Shaxpr . Fix . SignumShaxprF Nothing . expr
-  negate = Shaxpr . Fix . NegateShaxprF Nothing . expr
+  (+) = ((Shaxpr . Fix) .) . (. expr) . AddShaxprF . expr
+  (-) = ((Shaxpr . Fix) .) . (. expr) . SubShaxprF . expr
+  (*) = ((Shaxpr . Fix) .) . (. expr) . MulShaxprF . expr
+  fromInteger = fromConstant . IntTensor . D.fromList [] . return
+  signum = Shaxpr . Fix . SignumShaxprF . expr
+  negate = Shaxpr . Fix . NegateShaxprF . expr
 
 instance Fractional Shaxpr where
-  (/) = ((Shaxpr . Fix) .) . (. expr) . DivShaxprF Nothing . expr
-  fromRational = fromConstant . FloatArray . D.fromList [] . return . fromRational
+  (/) = ((Shaxpr . Fix) .) . (. expr) . DivShaxprF . expr
+  fromRational = fromConstant . FloatTensor . D.fromList [] . return . fromRational
 
 instance Floating Shaxpr where
-  sin = Shaxpr . Fix . SinShaxprF Nothing . expr
-  cos = Shaxpr . Fix . CosShaxprF Nothing . expr
-  exp = Shaxpr . Fix . ExpShaxprF Nothing . expr
+  sin =  Shaxpr . Fix . SinShaxprF . expr
+  cos =  Shaxpr . Fix . CosShaxprF . expr
+  exp =  Shaxpr . Fix . ExpShaxprF . expr
 
 instance Ord Shaxpr where
-  min = ((Shaxpr . Fix) .) . (. expr) . MinShaxprF Nothing . expr
-  max = ((Shaxpr . Fix) .) . (. expr) . MaxShaxprF Nothing . expr
+  min = (( Shaxpr . Fix) .) . (. expr) . MinShaxprF . expr
+  max = (( Shaxpr . Fix) .) . (. expr) . MaxShaxprF . expr
   compare = error "Cannot compare abstract expressions for order."
 
 class Closable t where
@@ -248,8 +243,9 @@ instance Closable Shaxpr where
 instance Closable [Shaxpr] where
   close' = const id
 
-instance (Closable b) => Closable (Shaxpr -> b) where
-  close' k f = close' (k + 1) (f (Shaxpr (Fix (ParamShaxprF Nothing k))))
+instance (Closable b) => Closable ( Shaxpr -> b) where
+  close' :: Closable b => Int -> ( Shaxpr -> b) -> [Shaxpr]
+  close' k f = close' (k + 1) (f ( Shaxpr (Fix (ParamShaxprF k))))
 
 close :: (Closable t) => t -> [Shaxpr]
 close = close' 0

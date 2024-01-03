@@ -15,14 +15,14 @@ import Text.PrettyPrint.HughesPJClass (prettyShow)
 import GHC.Stack
 
 
-import Binding
+import Bind
 import Definition
 import Environment
 import Types
 import Error
 import Shaxpr
 
-type RenameMap = B.BiMap VarName VarName
+type RenameMap = B.BiMap Var Var
 data BindingMonadState a = BindingMonadState {
   -- The bindings being produced.
   _env :: E.Env Binding,
@@ -36,7 +36,7 @@ makeLenses 'BindingMonadState
 
 type BindingMonadComputation a r = StateT (BindingMonadState a) (Either Error) r
 -- A binding map that has extra state of type a.
-type BindingMapper a = Binding -> BindingMonadComputation a VarName
+type BindingMapper a = Binding -> BindingMonadComputation a Var
 
 makeInitialState :: a -> BindingMonadState a
 makeInitialState a = BindingMonadState {
@@ -64,14 +64,14 @@ walkBindingsOrDie = (((fst . fromRight err) .) .) . walkBindings
   where
     err = error "Internal error: Failed to walk bindings."
 
-maybeRename :: VarName -> RenameMap -> VarName
+maybeRename :: Var -> RenameMap -> Var
 maybeRename x = B.lookupValWithDefault x x
 
 wrapRenaming :: HasCallStack => BindingMapper a -> Binding -> BindingMonadComputation a Binding
-wrapRenaming f (Binding v (ShaxprF mty op args)) = do
+wrapRenaming f (Bind v (ShaxprF op args)) = do
   currentRemap <- use remap
   let args' = map (`maybeRename` currentRemap) args
-  v' <- f (Binding v (ShaxprF mty op args'))
+  v' <- f (Bind v (ShaxprF op args'))
   newEnv <- use env
   case E.lookup v' newEnv of
     Left _ -> throwError $ Error ("Binding mapper returned variable " ++ prettyShow v' ++ ", which is not in the modified environment: " ++ prettyShow newEnv) callStack
@@ -82,19 +82,13 @@ wrapRenaming f (Binding v (ShaxprF mty op args)) = do
 freshVar :: BindingMonadComputation a VarName
 freshVar = E.nextName <$> use env
 
-newBind :: ShaxprF VarName -> BindingMonadComputation a VarName
-newBind e = do
-  v <- freshVar
-  let b = Binding v e
+newBind :: TensorType -> ShaxprF Var -> BindingMonadComputation a Var
+newBind ty e = do
+  vn <- freshVar
+  let v = Var vn ty
+  let b = Bind v e
   env %= E.insert v b
   return v
 
-keepBind :: Binding -> BindingMonadComputation a VarName
-keepBind = newBind . bindExpr
-
-getBindingType :: HasCallStack => VarName -> BindingMonadComputation a TensorType
-getBindingType v = do
-  vBind <- (>>= lift) (E.lookup v <$> use env)
-  case exprTy (bindExpr vBind) of
-    Just t -> return t
-    Nothing -> throwError (Error ("Failed to get type of variable " ++ prettyShow v) callStack)
+keepBind :: Binding -> BindingMonadComputation a Var
+keepBind (Bind (Var _ t) e) = newBind t e

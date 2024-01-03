@@ -17,7 +17,7 @@ import Text.PrettyPrint.HughesPJClass (pPrintPrec, PrettyLevel(..), render, pret
 
 import qualified Environment as E
 import Types
-import Binding
+import Bind
 import Error
 import Shaxpr
 import Definition
@@ -26,8 +26,8 @@ import Control.Monad.Except (throwError)
 import Control.Arrow (first, second)
 import Control.Monad (forM_)
 
-type TangentVarName = VarName
-type CotangentVarName = VarName
+type TangentVar = Var
+type CotangentVar = Var
 data CotangentState = CotangentState {
   -- Bindings for the transposed program.
   _env :: E.Env Binding,
@@ -37,43 +37,43 @@ data CotangentState = CotangentState {
   -- transposed program. The semantics are that if (x, xs) is in the map, then
   -- the cotangent of x is the sum of all xs.
   -- This is an alternative to implementing `dup` from the You Only Linearize Once paper.
-  _cotangentSummandsMap :: E.Env [CotangentVarName],
+  _cotangentSummandsMap :: E.Env [CotangentVar],
   -- A mapping from a variable name in the tangent program, to the cotangent
   -- variable that holds the sum of all cotangent summands.
-  _cotangentMap :: E.Env CotangentVarName,
+  _cotangentMap :: E.Env CotangentVar,
   -- A map between constants in the linear program and the corresponding constants
   -- in the dual program.
-  _constantRenames :: E.Env CotangentVarName,
+  _constantRenames :: E.Env CotangentVar,
   -- A map between environment reads in the linear program, and the corresponding
   -- environment read in the dual program.
-  _environmentRenames :: E.Env VarName
+  _environmentRenames :: E.Env Var
 }
 makeLenses 'CotangentState
 
 type CotangentComputation a = StateT CotangentState (Either Error) a
 
-addCotangent :: TangentVarName -> CotangentVarName -> CotangentComputation ()
+addCotangent :: TangentVar -> CotangentVar -> CotangentComputation ()
 addCotangent v ct = cannotFail $ do
   cotangentSummandsMap %= E.alter (\case
                             Nothing -> Just [ct]
                             Just as -> Just (ct:as)) v
   return ()
 
-addCotangentBinding :: ShaxprF CotangentVarName -> CotangentComputation VarName
-addCotangentBinding e = cannotFail $ do
-    v <- E.nextName <$> use env
-    env %= E.insert v (Binding v e)
-
+addCotangentBinding :: TensorType -> ShaxprF CotangentVar -> CotangentComputation Var
+addCotangentBinding t e = cannotFail $ do
+    nn <- E.nextName <$> use env
+    let v = Var nn t
+    env %= E.insert v (Bind v e)
     return v
 
-maybeGetCotangentSummands :: HasCallStack => VarName -> State CotangentState (Maybe [VarName])
+maybeGetCotangentSummands :: HasCallStack => Var -> State CotangentState (Maybe [Var])
 maybeGetCotangentSummands v = do
     cotangents <- E.lookup v <$> use cotangentSummandsMap
     return $ case cotangents of
         Left _ -> Nothing
         Right ct -> Just ct
 
-maybeRename :: VarName -> CotangentComputation VarName
+maybeRename :: Var -> CotangentComputation Var
 maybeRename v = do
   constRenames <- use constantRenames
   envRenames <- use environmentRenames
@@ -83,17 +83,14 @@ maybeRename v = do
                 Right w -> return w
     Right w -> return w
 
-isEnvironmentRead :: VarName -> CotangentComputation Bool
+isEnvironmentRead :: Var -> CotangentComputation Bool
 isEnvironmentRead v = cannotFail (E.member v <$> use environmentRenames)
 
-getOriginalVarType :: HasCallStack => VarName -> CotangentComputation TensorType
+getOriginalVarType :: HasCallStack => Var -> CotangentComputation TensorType
 getOriginalVarType v = do
   lEnv <- use originalEnv
   vBind <- lift (E.lookup v lEnv)
-  let ty = exprTy (bindExpr vBind)
-  case ty of
-    Nothing -> throwError (Error ("Failed to get original type of " ++ prettyShow v) callStack)
-    Just t -> return t
+  return . varType $ bindVar vBind
 
 transposeDef :: HasCallStack => LinearizedDefinition -> Either Error LinearizedDefinition
 transposeDef linearizedDefinition = do
@@ -106,49 +103,50 @@ transposeDef linearizedDefinition = do
   let numTangentParams = length (defArgTys linearDef) - envSize
       numTangentReturns = length (defRet linearDef)
       isTangentVectorParamIndex k = k < numTangentParams
-  let paramReads = M.fromList [(i, (v, t)) | Binding v (ParamShaxprF t i) <- defBinds linearDef,
-                                             isTangentVectorParamIndex i]
+  let paramReads = M.fromList [(i, (v, varType v))
+                               | Bind v (ParamShaxprF i) <- defBinds linearDef,
+                                 isTangentVectorParamIndex i]
   assertTrue (M.keys paramReads == [0 .. numTangentParams - 1]) $
     Error "Cannot transpose linear function with more or fewer than 1 uses per tangent parameter." callStack
 
   -- The first parameters of the dual program will have the same type as the return values
   -- of the linear program.
-  let defEnv = E.fromDefinition linearDef
-  linearRetBinds <- mapM (`E.lookup` defEnv) (defRet linearDef)
-  linearRetTypes <- case mapM (exprTy . bindExpr) linearRetBinds of
-                         Just xs -> Right xs
-                         Nothing -> Left (Error "Failed to get type of return values." callStack)
+  let linearRetTypes = map varType (defRet linearDef)
   let numCotangents = length linearRetTypes
   -- For simplicity, we hoist all cotangent parameter reads, environment parameter
   -- reads, and constants, to the top of the dual program.
   --
   -- We have one cotangent parameter read for each return value of the linear program.
-  let cotangentParamReads = [Binding (VarName i) (ParamShaxprF (Just t) i) | (t, i) <- zip linearRetTypes [0..]]
+  let cotangentParamReads = [Bind (Var (VarName i) t) (ParamShaxprF i) | (t, i) <- zip linearRetTypes [0..]]
   -- We have one environment param read for each variable in the environment. These
   -- will be parameter reads in the linear program, with parameter indices greater
   -- than the number of parameters of the primal program (nParams).
-  let environmentReads = M.fromList [(v, (i - numTangentReturns, t)) | Binding v (ParamShaxprF t i) <- defBinds linearDef,
-                                                                       i >= numTangentParams]
+  let environmentReads = M.fromList [(v, (i - numTangentReturns, varType v))
+                                     | Bind v (ParamShaxprF i) <- defBinds linearDef,
+                                       i >= numTangentParams]
       nEnvReads = length environmentReads
-      environmentParamReads = [Binding (VarName i) (ParamShaxprF t i) | (i, t) <- M.elems environmentReads] 
-      environmentParamTypes = map (fromJust . exprTy . bindExpr) environmentParamReads
-      environmentRenameMap = E.Env (fmap (VarName . fst) environmentReads)
+      environmentParamReads = [Bind (Var (VarName i) t) (ParamShaxprF i)
+                               | (i, t) <- M.elems environmentReads] 
+      environmentParamTypes = map (varType . bindVar) environmentParamReads
+      environmentRenameMap = E.Env (fmap (\(i, t) -> Var (VarName i) t) environmentReads)
   -- We will have one dual program constant for each linear program constant. Note these will
   -- usually be zero, unless we're checkpointing, in which case we're effectively putting part
   -- of the primal program in the dual program.
-  let linearProgramConstants = [b | b@(Binding _ (ConstantShaxprF _ _)) <- defBinds linearDef]
-      dualProgramConstants = [Binding (VarName v) (bindExpr b) | (v, b) <- zip [numCotangents + nEnvReads .. ] linearProgramConstants]
+  let linearProgramConstants = [b | b@(Bind _ (ConstantShaxprF _)) <- defBinds linearDef]
+      dualProgramConstants = [Bind (Var (VarName v) (varType (bindVar b))) (bindExpr b)
+                              | (v, b) <- zip [numCotangents + nEnvReads .. ] linearProgramConstants]
   -- We set the incoming cotangents of all parameters to be themselves. Note that the cotangent
   -- map domains are _linear_ program variables, while its codomain are _dual_ program variables.
   -- Thus we use `retBinds` as the keys, and [0 .. ] (the indices of the first dual program params)
   -- as the codomain.
-  let cotangentParamCotangents = [(v, VarName i) | (v, i) <- zip (defRet linearDef) [0 ..],
-                                                   i < numCotangents]
+  let cotangentParamCotangents = [(v, Var (VarName i) (varType v))
+                                  | (v, i) <- zip (defRet linearDef) [0 ..],
+                                    i < numCotangents]
       cotangentParamCotangentSummands = map (second return) cotangentParamCotangents
   -- Constants are renamed in the dual program, so we use this map to keep track of the pairing.
   -- Once again the keys come from the linear program, and the values come from the dual program.
-  let linearToDualConstants = [(bindLabel b, bindLabel b') | (b, b') <- zip linearProgramConstants dualProgramConstants]
-      initialEnv = foldr (\b@(Binding v _) -> E.insert v b) E.empty (cotangentParamReads ++ environmentParamReads ++ dualProgramConstants)
+  let linearToDualConstants = [(bindVar b, bindVar b') | (b, b') <- zip linearProgramConstants dualProgramConstants]
+      initialEnv = foldr (\b@(Bind v _) -> E.insert v b) E.empty (cotangentParamReads ++ environmentParamReads ++ dualProgramConstants)
       initialCotangents = foldr (uncurry E.insert) E.empty cotangentParamCotangents
       initialCotangentSummands = foldr (uncurry E.insert) E.empty cotangentParamCotangentSummands
       constRenames = foldr (uncurry E.insert) E.empty linearToDualConstants
@@ -160,11 +158,11 @@ transposeDef linearizedDefinition = do
   paramReadCotangents <- mapM ((`E.lookup` ctMap) . fst) (M.elems paramReads)
   paramCotangents <- mapM (`E.lookup` transposedEnv) paramReadCotangents
   
-  let dualDef = Definition {
+  let dualDef = Def {
     defName = defName linearDef ++ "t",
     defArgTys = linearRetTypes ++ environmentParamTypes,
     defBinds = E.toBindings transposedEnv,
-    defRet = map bindLabel paramCotangents
+    defRet = map bindVar paramCotangents
   }
 
   return $ LinearizedDefinition {
@@ -174,12 +172,12 @@ transposeDef linearizedDefinition = do
   }
 
 transposeBinding :: Binding -> CotangentComputation ()
-transposeBinding (Binding v (ConstantShaxprF _ _)) = do
+transposeBinding (Bind v (ConstantShaxprF _)) = do
   -- Constants were hoisted to the top of the dual program already, and 
   -- they never propagate cotangents (they have no predecessors in the linear
   -- program), so there's nothing to do.
   return ()
-transposeBinding b@(Binding v (ShaxprF mty op args)) = do
+transposeBinding b@(Bind v@(Var _ t) (ShaxprF op args)) = do
     -- Given v, get dL/dv = \ddot{v}.
     -- We're walking the program backwards, and we've just seen the
     -- creation of variable v. At this point we'll write down the
@@ -191,15 +189,15 @@ transposeBinding b@(Binding v (ShaxprF mty op args)) = do
         Just cts
             | cts == [v] -> do
               -- We pull back dL/dV along f for each argument.
-              appendCotangents v mty op args
+              appendCotangents v t op args
             | otherwise -> do
               -- We write the sum of cotangents, and record the final
               -- variable (which holds the full sum of cotangents)
               -- in cotangentMap.
-              ctv <- flushCotangents mty v cts
+              ctv <- flushCotangents t v cts
               cotangentMap %= E.insert v ctv
               -- Now we pull back dL/dV along f for each argument.
-              appendCotangents ctv mty op args
+              appendCotangents ctv t op args
       -- This would be the case when a variable was used, but has no cotangent path
       -- to any return variable. This can happen with environment reads or constants,
       -- but also variables which are never used (drops). 
@@ -207,60 +205,59 @@ transposeBinding b@(Binding v (ShaxprF mty op args)) = do
         Nothing -> return ()
 
 -- TODO: Use a binary tree of summands, instead of a sequential sum.
-flushCotangents :: HasCallStack => Maybe TensorType -> VarName -> [VarName] -> CotangentComputation VarName
+flushCotangents :: HasCallStack => TensorType -> Var -> [Var] -> CotangentComputation Var
 flushCotangents _ v [] = throwError $ Error ("Cannot happen! No cotangents found for " ++ show v) callStack
 -- Maybe not needed?
 flushCotangents _ _ [ct] = return ct -- addCotangentBinding (IdShaxprF mty ct)
-flushCotangents mty _ (c:cs) = foldM combine c cs
+flushCotangents t _ (c:cs) = foldM combine c cs
   where
-    combine = (addCotangentBinding .) . AddShaxprF mty    
+    combine = (addCotangentBinding t .) . AddShaxprF   
 
-appendCotangents :: HasCallStack => VarName -> Maybe TensorType -> Op -> [VarName] -> CotangentComputation ()
+appendCotangents :: HasCallStack => Var -> TensorType -> Op -> [Var] -> CotangentComputation ()
 appendCotangents _ _ (Param _) [] = do
   return ()
-appendCotangents dLdZ mty (BinaryPointwise Add) [x, y] = do
+appendCotangents dLdZ _ (BinaryPointwise Add) [x, y] = do
   -- If Z = X + Y, then dL/dX = dL/dZ, and dL/dY = dL/dZ.
   addCotangent x dLdZ
   addCotangent y dLdZ
-appendCotangents dLdZ mty (BinaryPointwise Sub) [x, y] = do
+appendCotangents dLdZ t (BinaryPointwise Sub) [x, y] = do
   -- If Z = X - Y, then dL/dX = dL/dZ, and dL/dY = -dL/dZ.
   addCotangent x dLdZ
-  ct <- addCotangentBinding  (NegateShaxprF mty dLdZ)
+  ct <- addCotangentBinding t (NegateShaxprF dLdZ)
   addCotangent y ct
-appendCotangents dLdZ mty (BinaryPointwise Mul) [x, y] = do
+appendCotangents dLdZ t (BinaryPointwise Mul) [x, y] = do
   -- By convention, x is a constant, and y is the actual tangent in the linear
   -- program. Thus if Z = X . Y, we have dL/dX = 0, and dL/dY = X . dL/dZ.
   -- Note x here is a linear program variable, and we want its value in the
   -- dual program. This is the same value, but the constant may have been
   -- renamed in the dual program, so we possibly rename it.
   x' <- maybeRename x
-  ct <- addCotangentBinding (MulShaxprF mty x' dLdZ)
+  ct <- addCotangentBinding t (MulShaxprF x' dLdZ)
   addCotangent y ct
-appendCotangents dLdZ mty (Reshape sh') [x] = do
+appendCotangents dLdZ _ (Reshape _) [x] = do
   t@(TensorType bt sh) <- getOriginalVarType x
-  ct <- addCotangentBinding (ReshapeShaxprF (Just t) sh dLdZ)
+  ct <- addCotangentBinding t (ReshapeShaxprF sh dLdZ)
   addCotangent x ct
-appendCotangents dLdZ mty (Transpose perm) [x] = do
+appendCotangents dLdZ _ (Transpose perm) [x] = do
   tx <- getOriginalVarType x
   -- If Z = transpose p X, then dL/dX = transpose p^{-1} dL/dZ.
-  ct <- addCotangentBinding (TransposeShaxprF (Just tx) (inversePerm perm) dLdZ)
+  ct <- addCotangentBinding tx (TransposeShaxprF (inversePerm perm) dLdZ)
   addCotangent x ct
-appendCotangents dLdZ mty (Slice sixs eixs) [x]
-    | Just (TensorType bt shout) <- mty = do
+appendCotangents dLdZ (TensorType bt shout) (Slice sixs eixs) [x] = do
   t@(TensorType _ shin) <- getOriginalVarType x
   let lo = sixs
       hi = zipWith (-) shin eixs
-  ct <- addCotangentBinding (PadShaxprF (Just t) (zip lo hi) 0.0 dLdZ)
+  ct <- addCotangentBinding t (PadShaxprF (zip lo hi) 0.0 dLdZ)
   addCotangent x ct
 appendCotangents dLdZ _ (Broadcast ixs shout) [x] = do
   t@(TensorType bt shin) <- getOriginalVarType x
   let rank = length shout
       allOutputDimIxs = [0 .. rank - 1]
       broadcastedDimIxs = allOutputDimIxs \\ ixs
-      mty = Just (TensorType bt shin)
-  ct <- addCotangentBinding (ReduceSumShaxprF mty broadcastedDimIxs dLdZ)
+      ty = TensorType bt shin
+  ct <- addCotangentBinding ty (ReduceSumShaxprF broadcastedDimIxs dLdZ)
   addCotangent x ct
-appendCotangents dLdZ mty bb@(DotGeneral (DotDimensionNumbers [2] [1] [0] [0])) [x, y] = do
+appendCotangents dLdZ _ bb@(DotGeneral (DotDimensionNumbers [2] [1] [0] [0])) [x, y] = do
   tx <- getOriginalVarType x
   ty <- getOriginalVarType y
   (bt, b, n, m, p) <- case (tx, ty) of
@@ -279,13 +276,13 @@ appendCotangents dLdZ mty bb@(DotGeneral (DotDimensionNumbers [2] [1] [0] [0])) 
   isYEnv <- isEnvironmentRead y
 
   if isXEnv then do
-    xt <- addCotangentBinding (TransposeShaxprF (Just (TensorType bt [b, m, n])) [0, 2, 1] x')
-    xtdLdz <- addCotangentBinding (DotGeneralShaxprF (Just ty) (DotDimensionNumbers [2] [1] [0] [0]) xt dLdZ)
+    xt <- addCotangentBinding (TensorType bt [b, m, n]) (TransposeShaxprF [0, 2, 1] x')
+    xtdLdz <- addCotangentBinding ty (DotGeneralShaxprF (DotDimensionNumbers [2] [1] [0] [0]) xt dLdZ)
     addCotangent y xtdLdz
   else do
     assertTrue isYEnv (Error ("Found nonlinear dot product " ++ prettyShow bb ++ " in transpose. In linear program, the arguments are " ++ prettyShow [x, y] ++ ", in the cotangent program they are " ++ prettyShow [x', y']) callStack)
-    yt <- addCotangentBinding (TransposeShaxprF (Just (TensorType bt [b, p, m])) [0, 2, 1] y')
-    dLdzyt <- addCotangentBinding (DotGeneralShaxprF (Just tx) (DotDimensionNumbers [2] [1] [0] [0]) dLdZ yt)
+    yt <- addCotangentBinding (TensorType bt [b, p, m]) (TransposeShaxprF [0, 2, 1] y')
+    dLdzyt <- addCotangentBinding tx (DotGeneralShaxprF (DotDimensionNumbers [2] [1] [0] [0]) dLdZ yt)
     addCotangent x dLdzyt
 
 appendCotangents _ _ op _ = error $ "Unimplemented transpose of " ++ show op

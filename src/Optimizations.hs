@@ -15,7 +15,7 @@ module Optimizations
 where
 
 import qualified BiMap as BM
-import Binding
+import Bind
 import BindingMonad
 import BroadcastSemantics
 import Control.Lens hiding (op)
@@ -61,77 +61,68 @@ applyPasses :: [OptimizationPass] -> Definition -> Definition
 applyPasses = foldr (.) id . map applyPass
 
 foldConstants :: Definition -> Definition
-foldConstants (Definition name argTys binds rets) =
-  let foldedDef = Definition name argTys newBinds rets
+foldConstants (Def name argTys binds rets) =
+  let foldedDef = Def name argTys newBinds rets
    in eliminateDeadCode foldedDef
   where
     newBinds = go E.empty binds
     go _ [] = []
-    go env (b@(Binding v e@(ShaxprF mty op args)) : bs)
+    go env (b@(Bind v e@(ShaxprF op args)) : bs)
       | Param k <- op = b : go env bs
       | Right args' <- mapM (`E.lookup` env) args =
-          let res = evalShaxpr . Shaxpr . Fix $ ShaxprF mty op (map Fix args')
-              c = ConstantShaxprF mty res
-           in Binding v c : go (E.insert v c env) bs
+          let res = evalShaxpr . Shaxpr . Fix $ ShaxprF op (map Fix args')
+              c = ConstantShaxprF res
+           in Bind v c : go (E.insert v c env) bs
       | otherwise = b : go env bs
 
 eliminateDeadCode :: Definition -> Definition
-eliminateDeadCode (Definition name argTys binds rets) = Definition name argTys newBinds rets
+eliminateDeadCode (Def name argTys binds rets) = Def name argTys newBinds rets
   where
-    newBinds = filter ((`S.member` allUsed) . bindLabel) binds
+    newBinds = filter ((`S.member` allUsed) . bindVar) binds
     allUsed = collectUsed (S.fromList rets) (reverse binds)
     collectUsed forwardUses [] = forwardUses
-    collectUsed forwardUses ((Binding v (ShaxprF _ _ args)) : bs)
+    collectUsed forwardUses ((Bind v (ShaxprF _ args)) : bs)
       | S.member v forwardUses =
           let append = foldr (.) id (map S.insert args)
-           in collectUsed (append forwardUses) bs
+          in collectUsed (append forwardUses) bs
       | otherwise = collectUsed forwardUses bs
 
 eliminateCommonSubexpressions :: Definition -> Definition
-eliminateCommonSubexpressions (Definition name argTys binds rets) =
-  Definition name argTys (reverse newBinds) newRets
+eliminateCommonSubexpressions (Def name argTys binds rets) =
+  Def name argTys (reverse newBinds) newRets
   where
     (newBinds, renames) = go BM.empty M.empty [] binds
     newRets = map (fromJust . (`M.lookup` renames)) rets
     go _ renames newBinds [] = (newBinds, renames)
-    go expressionNames renames newBinds (Binding v e : binds)
+    go expressionNames renames newBinds (Bind v@(Var vn t) e : binds)
       | Just existingName <- BM.lookupKey e' expressionNames =
-          go expressionNames (M.insert v existingName renames) newBinds binds
+          go expressionNames (M.insert v (Var existingName t) renames) newBinds binds
       | otherwise =
           let (v', expressionNames') = BM.insert e' expressionNames
-              renames' = M.insert v v' renames
-           in go expressionNames' renames' (Binding v' e' : newBinds) binds
+              newV = Var v' t
+              renames' = M.insert v newV renames
+           in go expressionNames' renames' (Bind newV e' : newBinds) binds
       where
         e' = maybeRename <$> e
-        maybeRename name
-          | Just newName <- M.lookup name renames = newName
-          | otherwise = name
+        maybeRename name = M.findWithDefault name name renames
 
 materializeBroadcasts :: (HasCallStack) => Definition -> Definition
 materializeBroadcasts = walkBindingsOrDie () broadcaster
   where
     broadcaster :: BindingMapper ()
-    broadcaster b@(Binding _ (ShaxprF mte op args)) =
-      case (op, args) of
-        (BinaryPointwise bop, [x, y]) -> do
-          ee <- use env
-          mtx <- exprTy . bindExpr <$> lift (E.lookup x ee)
-          mty <- exprTy . bindExpr <$> lift (E.lookup y ee)
-          case (mtx, mty) of
-            (Just tx, Just ty) ->
-              if tx == ty
-                then keepBind b
-                else do
-                  BroadcastInDimResult ixx ixy common <- lift $ broadcastInDims (tyShape tx) (tyShape ty)
-                  x' <- case ixx of
-                    Nothing -> return x
-                    Just s -> newBind (BroadcastShaxprF mte s common x)
-                  y' <- case ixy of
-                    Nothing -> return y
-                    Just s -> newBind (BroadcastShaxprF mte s common y)
-                  newBind (ShaxprF mte op [x', y'])
-            _ -> throwError (Error ("Failed to get type of operands in " ++ prettyShow b) callStack)
-        _ -> keepBind b
+    broadcaster b@(Bind (Var _ t) (ShaxprF op@(BinaryPointwise _) [x, y])) |
+      Var _ tx <- x,
+      Var _ ty <- y,
+      tx /= ty = do
+        BroadcastInDimResult ixx ixy common <- lift $ broadcastInDims (tyShape tx) (tyShape ty)
+        x' <- case ixx of
+          Nothing -> return x
+          Just s -> newBind t (BroadcastShaxprF s common x)
+        y' <- case ixy of
+          Nothing -> return y
+          Just s -> newBind t (BroadcastShaxprF s common y)
+        newBind t (ShaxprF op [x', y'])
+    broadcaster b = keepBind b
 
 data DimOrder = LHS | RHS deriving (Show)
 
@@ -139,10 +130,9 @@ canonicalizeDotGeneral :: Definition -> Definition
 canonicalizeDotGeneral = walkBindingsOrDie () canonicalizer
   where
     canonicalizer :: BindingMapper ()
-    canonicalizer b@(Binding _ (DotGeneralShaxprF ty@(Just (TensorType bt sh)) dims x y)) = do
-      currentEnv <- use env
-      shx <- tyShape . fromJust . bindType <$> lift (E.lookup x currentEnv)
-      shy <- tyShape . fromJust . bindType <$> lift (E.lookup y currentEnv)
+    canonicalizer b@(Bind (Var _ ty@(TensorType bt sh)) (DotGeneralShaxprF dims x y)) = do
+      let Var _ (TensorType _ shx) = x
+          Var _ (TensorType _ shy) = y
       let DotDimensionNumbers lhsContractingIxs rhsContractingIxs lhsBatchIxs rhsBatchIxs = dims
           lhsNonContractingIxs = getNonContracting shx lhsContractingIxs lhsBatchIxs
           rhsNonContractingIxs = getNonContracting shy rhsContractingIxs rhsBatchIxs
@@ -151,12 +141,12 @@ canonicalizeDotGeneral = walkBindingsOrDie () canonicalizer
       let batch = map (shx !!) lhsBatchIxs
           lhsNonContracting = map (shx !!) lhsNonContractingIxs
           rhsNonContracting = map (shy !!) rhsNonContractingIxs
-      let mmType = Just . TensorType bt $ [product batch, product lhsNonContracting, product rhsNonContracting]
+      let mmTy = TensorType bt [product batch, product lhsNonContracting, product rhsNonContracting]
           canonicalDotDims = DotDimensionNumbers [2] [1] [0] [0]
-      z <- newBind (DotGeneralShaxprF mmType canonicalDotDims x' y')
-      newBind (ReshapeShaxprF ty (batch ++ lhsNonContracting ++ rhsNonContracting) z)
+      z <- newBind mmTy (DotGeneralShaxprF canonicalDotDims x' y')
+      newBind ty (ReshapeShaxprF (batch ++ lhsNonContracting ++ rhsNonContracting) z)
     canonicalizer x = keepBind x
-    transposeAndReshapeForMatmul :: DimOrder -> DimIxs -> DimIxs -> DimIxs -> Shape -> VarName -> BindingMonadComputation () VarName
+    transposeAndReshapeForMatmul :: DimOrder -> DimIxs -> DimIxs -> DimIxs -> Shape -> Var -> BindingMonadComputation () Var
     transposeAndReshapeForMatmul dimOrder contracting nonContracting batch shx x = do
       let permParts = case dimOrder of
             LHS -> [batch, nonContracting, contracting]
@@ -164,15 +154,13 @@ canonicalizeDotGeneral = walkBindingsOrDie () canonicalizer
           perm = concat permParts
           permutedShape = map (shx !!) perm
           newShape = map (product . map (shx !!)) permParts
-      currentEnv <- use env
-      xBind <- lift (E.lookup x currentEnv)
-      let bt = tyBase (fromJust (bindType xBind))
+      let bt = tyBase (varType x)
       x' <- if perm == [0 .. length perm - 1]
             then return x
-            else newBind (TransposeShaxprF (Just (TensorType bt permutedShape)) perm x)
+            else newBind (TensorType bt permutedShape) (TransposeShaxprF perm x)
       if newShape == permutedShape
       then return x'
-      else newBind (ReshapeShaxprF (Just (TensorType bt newShape)) newShape x')
+      else newBind (TensorType bt newShape) (ReshapeShaxprF newShape x')
     getNonContracting sh contracting batch =
       let allDims = [0 .. length sh - 1]
        in allDims \\ (batch ++ contracting)
@@ -181,14 +169,13 @@ lowerReductionsToSumsOfSlices :: Definition -> Definition
 lowerReductionsToSumsOfSlices = walkBindingsOrDie () lower
   where
     lower :: BindingMapper ()
-    lower b@(Binding _ (ReduceSumShaxprF mty ixs x))
-      | Just (TensorType bt sh) <- mty = do
-         TensorType _ sh' <- getBindingType x
+    lower b@(Bind (Var _ ty@(TensorType bt sh)) (ReduceSumShaxprF ixs x)) = do
+         let TensorType _ sh' = varType x
          v <- go bt sh' ixs x
          -- TODO: This need only be a squeeze, not a full reshape.
-         newBind (ReshapeShaxprF mty sh v)
+         newBind ty (ReshapeShaxprF sh v)
     lower x = keepBind x
-    go bt _ [] x = return x
+    go _ _ [] x = return x
     go bt sh (i:ixs) x = do
       let newShape = take i sh ++ (1 : drop (i + 1) sh)
       z <- splitAndSumAtDim bt sh i x
@@ -206,26 +193,28 @@ lowerReductionsToSumsOfSlices = walkBindingsOrDie () lower
             let (rightIxs, leftIxs) = indicesForSplitAt i (dim `div` 2) sh
                 shLeft = leftIxs
                 shRight = zipWith (-) sh rightIxs
-                tyLeft = Just (TensorType bt shLeft)
-                tyRight = Just (TensorType bt shRight)
-            left <- newBind (SliceShaxprF tyLeft (replicate rank 0) leftIxs v)
-            right <- newBind (SliceShaxprF tyRight rightIxs sh v)
+                tyLeft = TensorType bt shLeft
+                tyRight = TensorType bt shRight
+            left <- newBind tyLeft (SliceShaxprF (replicate rank 0) leftIxs v)
+            right <- newBind tyRight (SliceShaxprF rightIxs sh v)
             left' <- splitAndSumAtDim bt shLeft i left
             right' <- splitAndSumAtDim bt shRight i right
-            newBind (AddShaxprF (Just (TensorType bt finalShape)) left' right')
+            let finalType = TensorType bt finalShape
+            newBind finalType (AddShaxprF left' right')
           else do
             -- If the dimension to split is odd, we split it into 1 and n - 1.
             let (rightIxs, leftIxs) = indicesForSplitAt i 1 sh
                 shLeft = leftIxs
                 shRight = zipWith (-) sh rightIxs
-                tyLeft = Just (TensorType bt shLeft)
-                tyRight = Just (TensorType bt shRight)
-            left <- newBind (SliceShaxprF tyLeft (replicate rank 0) leftIxs v)
-            right <- newBind (SliceShaxprF tyRight rightIxs sh v)
+                tyLeft = TensorType bt shLeft
+                tyRight = TensorType bt shRight
+            left <- newBind tyLeft (SliceShaxprF (replicate rank 0) leftIxs v)
+            right <- newBind tyRight (SliceShaxprF rightIxs sh v)
             right' <- splitAndSumAtDim bt shRight i right
             -- Note we don't need to recursively split `left`, as its
-            -- i'th dimension is 1.\
-            newBind (AddShaxprF (Just (TensorType bt finalShape)) left right')
+            -- i'th dimension is 1.
+            let finalType = TensorType bt finalShape
+            newBind finalType (AddShaxprF left right')
 
 
 indicesForSplitAt :: Int -> Int -> Shape -> (DimIxs, DimIxs)
@@ -236,7 +225,3 @@ indicesForSplitAt i l sh = let complementPos = length sh - i
                                rl = take i sh
                                rr = drop (i + 1) sh
                             in  (ll++l:lr, rl++complement:rr)
-
-
-
-

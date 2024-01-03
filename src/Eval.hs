@@ -1,6 +1,6 @@
 module Eval (evalFunc, evalShaxpr, evalDefinition) where
 
-import Binding
+import Bind
 import BroadcastSemantics
 import Control.Monad.Except
 import Control.Monad.State
@@ -13,9 +13,10 @@ import HNP
 import Shaxpr
 import Text.PrettyPrint.HughesPJClass
 import Types
+import Tensor
 
 wrapBroadcastSemantics ::
-  (HasCallStack) => (SomeArray -> SomeArray -> SomeArray) -> Fix ShaxprF -> Fix ShaxprF -> SomeArray
+  (HasCallStack) => (Tensor -> Tensor -> Tensor) -> Fix ShaxprF -> Fix ShaxprF -> Tensor
 wrapBroadcastSemantics f x y =
   let x' = evalShaxprF x
       y' = evalShaxprF y
@@ -24,41 +25,41 @@ wrapBroadcastSemantics f x y =
       y'' = stretchArr newShape (reshape rR y')
    in f x'' y''
 
-evalShaxpr :: (HasCallStack) => Shaxpr -> SomeArray
+evalShaxpr :: HasCallStack => Shaxpr -> Tensor
 evalShaxpr = evalShaxprF . expr
 
-evalShaxprF :: (HasCallStack) => Fix ShaxprF -> SomeArray
-evalShaxprF (Fix (ConstantShaxprF _ x)) = x
-evalShaxprF (Fix (SignumShaxprF _ x)) = signum (evalShaxprF x)
-evalShaxprF (Fix (NegateShaxprF _ x)) = negate (evalShaxprF x)
-evalShaxprF (Fix (AddShaxprF _ x y)) = wrapBroadcastSemantics (+) x y
-evalShaxprF (Fix (SubShaxprF _ x y)) = wrapBroadcastSemantics (-) x y
-evalShaxprF (Fix (MulShaxprF _ x y)) = wrapBroadcastSemantics (*) x y
-evalShaxprF (Fix (DivShaxprF _ x y)) = wrapBroadcastSemantics (/) x y
-evalShaxprF (Fix (IdShaxprF _ x)) = evalShaxprF x
-evalShaxprF (Fix (CosShaxprF _ x)) = cos (evalShaxprF x)
-evalShaxprF (Fix (SinShaxprF _ x)) = sin (evalShaxprF x)
-evalShaxprF (Fix (ExpShaxprF _ x)) = exp (evalShaxprF x)
-evalShaxprF (Fix (MinShaxprF _ x y)) = wrapBroadcastSemantics min x y
-evalShaxprF (Fix (MaxShaxprF _ x y)) = wrapBroadcastSemantics max x y
-evalShaxprF (Fix (BroadcastShaxprF _ ixs sh x)) = broadcast ixs sh (evalShaxprF x)
-evalShaxprF (Fix (SliceShaxprF _ sixs eixs x)) = slice sixs eixs (evalShaxprF x)
-evalShaxprF (Fix (PadShaxprF _ lohi val x)) = pad lohi val (evalShaxprF x)
-evalShaxprF (Fix (TransposeShaxprF _ ixs x)) = transpose ixs (evalShaxprF x)
-evalShaxprF (Fix (ReshapeShaxprF _ sh x)) = reshape sh (evalShaxprF x)
-evalShaxprF (Fix (ReduceSumShaxprF _ ixs x)) = reduceSum ixs (evalShaxprF x)
-evalShaxprF (Fix (ParamShaxprF _ _)) = error "Cannot evaluate an expression with unbound variables."
-evalShaxprF (Fix (DotGeneralShaxprF _ dims x y)) = dotGeneral dims (evalShaxprF x) (evalShaxprF y)
+evalShaxprF :: HasCallStack => Fix ShaxprF -> Tensor
+evalShaxprF (Fix (ConstantShaxprF x)) = x
+evalShaxprF (Fix (SignumShaxprF x)) = signum (evalShaxprF x)
+evalShaxprF (Fix (NegateShaxprF x)) = negate (evalShaxprF x)
+evalShaxprF (Fix (AddShaxprF x y)) = wrapBroadcastSemantics (+) x y
+evalShaxprF (Fix (SubShaxprF x y)) = wrapBroadcastSemantics (-) x y
+evalShaxprF (Fix (MulShaxprF x y)) = wrapBroadcastSemantics (*) x y
+evalShaxprF (Fix (DivShaxprF x y)) = wrapBroadcastSemantics (/) x y
+evalShaxprF (Fix (IdShaxprF x)) = evalShaxprF x
+evalShaxprF (Fix (CosShaxprF x)) = cos (evalShaxprF x)
+evalShaxprF (Fix (SinShaxprF x)) = sin (evalShaxprF x)
+evalShaxprF (Fix (ExpShaxprF x)) = exp (evalShaxprF x)
+evalShaxprF (Fix (MinShaxprF x y)) = wrapBroadcastSemantics min x y
+evalShaxprF (Fix (MaxShaxprF x y)) = wrapBroadcastSemantics max x y
+evalShaxprF (Fix (BroadcastShaxprF ixs sh x)) = broadcast ixs sh (evalShaxprF x)
+evalShaxprF (Fix (SliceShaxprF sixs eixs x)) = slice sixs eixs (evalShaxprF x)
+evalShaxprF (Fix (PadShaxprF lohi val x)) = pad lohi val (evalShaxprF x)
+evalShaxprF (Fix (TransposeShaxprF ixs x)) = transpose ixs (evalShaxprF x)
+evalShaxprF (Fix (ReshapeShaxprF sh x)) = reshape sh (evalShaxprF x)
+evalShaxprF (Fix (ReduceSumShaxprF ixs x)) = reduceSum ixs (evalShaxprF x)
+evalShaxprF (Fix (ParamShaxprF _)) = error "Cannot evaluate an expression with unbound variables."
+evalShaxprF (Fix (DotGeneralShaxprF dims x y)) = dotGeneral dims (evalShaxprF x) (evalShaxprF y)
 evalShaxprF e = error $ "Invalid expression being evaluated! " ++ show e
 
-type BindingState = M.Map VarName SomeArray
+type BindingState = M.Map Var Tensor
 
 type BindingComputation = StateT BindingState (Either Error)
 
-evalDefinition :: (HasCallStack) => Definition -> [SomeArray] -> Either Error [SomeArray]
+evalDefinition :: (HasCallStack) => Definition -> [Tensor] -> Either Error [Tensor]
 evalDefinition defn args = do
   bindValues <- execStateT (mapM_ runBind (defBinds defn)) M.empty
-  let argumentTypes = map someArrayType args
+  let argumentTypes = map tensorType args
       parameterTypes = defArgTys defn
   assertTrue (argumentTypes == parameterTypes) $
     Error
@@ -73,9 +74,8 @@ evalDefinition defn args = do
     Just arrs -> Right arrs
   where
     argMap = M.fromList $ zip [0 ..] args
-    bindTypeMap = M.fromList $ map (\b -> (bindLabel b, exprTy (bindExpr b))) (defBinds defn)
     runBind :: Binding -> BindingComputation ()
-    runBind bb@(Binding v (ShaxprF ty op args')) = do
+    runBind bb@(Bind v (ShaxprF op args')) = do
       s <- get
       args'' <- lift $ mapM (argToConstantShaxprF s) args'
       arr <-
@@ -83,15 +83,15 @@ evalDefinition defn args = do
           Param k -> case M.lookup k argMap of
             Nothing -> throwError $ Error ("Cannot find argument " ++ prettyShow k) callStack
             Just arr -> return arr
-          _ -> return $ evalShaxprF (Fix (ShaxprF ty op args''))
+          _ -> return $ evalShaxprF (Fix (ShaxprF op args''))
       let s' = M.insert v arr s
       put s'
-    argToConstantShaxprF :: BindingState -> VarName -> Either Error (Fix ShaxprF)
-    argToConstantShaxprF s v = case (M.lookup v s, M.lookup v bindTypeMap) of
-      (Just arr, Just t) -> Right . Fix $ ConstantShaxprF t arr
+    argToConstantShaxprF :: BindingState -> Var -> Either Error (Fix ShaxprF)
+    argToConstantShaxprF s v = case M.lookup v s of
+      Just arr -> Right . Fix $ ConstantShaxprF arr
       _ -> Left $ Error ("Cannot find variable " ++ prettyShow v) callStack
 
-evalFunc :: (HasCallStack) => Op -> [SomeArray] -> SomeArray
-evalFunc op args = evalShaxprF (Fix (ShaxprF Nothing op args'))
+evalFunc :: (HasCallStack) => Op -> [Tensor] -> Tensor
+evalFunc op args = evalShaxprF (Fix (ShaxprF op args'))
   where
-    args' = map (Fix . ConstantShaxprF Nothing) args
+    args' = map (Fix . ConstantShaxprF) args

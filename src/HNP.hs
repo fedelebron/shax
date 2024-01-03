@@ -10,6 +10,7 @@ import Data.Int (Int64)
 import Data.List ((\\))
 import Shaxpr
 import Types
+import Tensor
 
 class HNP a where
   reshape :: Shape -> a -> a
@@ -22,26 +23,26 @@ class HNP a where
   dot :: a -> a -> a
   dot = dotGeneral (DotDimensionNumbers [1] [0] [] [])
 
-wrapArrayOperation :: (forall a. Num a => D.Array a -> D.Array a) -> SomeArray -> SomeArray
-wrapArrayOperation f (IntArray arr) = IntArray (f arr)
-wrapArrayOperation f (FloatArray arr) = FloatArray (f arr)
+wrapArrayOperation :: (forall a. Num a => D.Array a -> D.Array a) -> Tensor -> Tensor
+wrapArrayOperation f (IntTensor arr) = IntTensor (f arr)
+wrapArrayOperation f (FloatTensor arr) = FloatTensor (f arr)
 
-broadcastArr :: [Int] -> Shape -> SomeArray -> SomeArray
+broadcastArr :: [Int] -> Shape -> Tensor -> Tensor
 broadcastArr dims sh = wrapArrayOperation (D.broadcast dims sh)
 
-sliceArr :: DimIxs -> DimIxs -> SomeArray -> SomeArray
+sliceArr :: DimIxs -> DimIxs -> Tensor -> Tensor
 sliceArr sixs eixs = wrapArrayOperation (D.slice (zip sixs eixs))
 
-stretchArr :: Shape -> SomeArray -> SomeArray
+stretchArr :: Shape -> Tensor -> Tensor
 stretchArr sh = wrapArrayOperation (D.stretch sh)
 
-reshapeArr :: Shape -> SomeArray -> SomeArray
+reshapeArr :: Shape -> Tensor -> Tensor
 reshapeArr sh = wrapArrayOperation (D.reshape sh)
 
-transposeArr :: DimIxs -> SomeArray -> SomeArray
+transposeArr :: DimIxs -> Tensor -> Tensor
 transposeArr ixs = wrapArrayOperation (D.transpose ixs)
 
-reduceSumArr :: DimIxs -> SomeArray -> SomeArray
+reduceSumArr :: DimIxs -> Tensor -> Tensor
 reduceSumArr ixs = wrapArrayOperation f
   where
     f :: forall a. Num a => D.Array a -> D.Array a
@@ -51,22 +52,22 @@ reduceSumArr ixs = wrapArrayOperation f
                 transposedIxs = (allDimIxs \\ ixs) ++ ixs
             in  D.rerank (rank - length ixs) (D.reduce (+) 0) (D.transpose transposedIxs arr)
 
-padArr :: [(Int, Int)] -> Float -> SomeArray -> SomeArray
-padArr lohi val (FloatArray arr) = FloatArray (D.pad lohi val arr)
-padArr lohi val (IntArray arr) = IntArray (D.pad lohi (truncate val) arr)
+padArr :: [(Int, Int)] -> Float -> Tensor -> Tensor
+padArr lohi val (FloatTensor arr) = FloatTensor (D.pad lohi val arr)
+padArr lohi val (IntTensor arr) = IntTensor (D.pad lohi (truncate val) arr)
 
 -- MM.matMul can't deal with Integer, so we wrap to and from Int64.
 -- Gross, I know.
-matMulArr3 :: SomeArray -> SomeArray -> SomeArray
-matMulArr3 (IntArray x) (IntArray y) =
+matMulArr3 :: Tensor -> Tensor -> Tensor
+matMulArr3 (IntTensor x) (IntTensor y) =
   let x' = D.mapA fromIntegral x :: D.Array Int64
       y' = D.mapA fromIntegral y :: D.Array Int64
-   in IntArray $ D.mapA fromIntegral (D.rerank2 1 MM.matMul x' y')
-matMulArr3 (FloatArray x) (FloatArray y) =
-  FloatArray (D.rerank2 1 MM.matMul x y)
+   in IntTensor $ D.mapA fromIntegral (D.rerank2 1 MM.matMul x' y')
+matMulArr3 (FloatTensor x) (FloatTensor y) =
+  FloatTensor (D.rerank2 1 MM.matMul x y)
 matMulArr3 _ _ = error "Cannot happen."
 
-instance HNP SomeArray where
+instance HNP Tensor where
   reshape = reshapeArr
   broadcast = broadcastArr
   slice = sliceArr
@@ -93,7 +94,7 @@ instance HNP SomeArray where
 
 data DimOrder = LHS | RHS deriving (Show)
 
-transposeAndReshapeForMatmul :: DimOrder -> DimIxs -> DimIxs -> DimIxs -> SomeArray -> SomeArray
+transposeAndReshapeForMatmul :: DimOrder -> DimIxs -> DimIxs -> DimIxs -> Tensor -> Tensor
 transposeAndReshapeForMatmul dimOrder contracting nonContracting batch x =
   let permParts = case dimOrder of
         LHS -> [batch, nonContracting, contracting]
@@ -103,10 +104,10 @@ transposeAndReshapeForMatmul dimOrder contracting nonContracting batch x =
    in reshapeArr newShape (transposeArr perm x)
 
 instance HNP Shaxpr where
-  reshape = ((Shaxpr . Fix) .) . (. expr) . ReshapeShaxprF Nothing
-  broadcast ixs sh x = Shaxpr . Fix $ BroadcastShaxprF Nothing ixs sh (expr x)
-  slice sixs eixs x = Shaxpr . Fix $ SliceShaxprF Nothing sixs eixs (expr x)
-  pad lohi val x = Shaxpr . Fix $ PadShaxprF Nothing lohi val (expr x)
-  reduceSum ixs x = Shaxpr . Fix $ ReduceSumShaxprF Nothing ixs (expr x)
-  transpose = ((Shaxpr . Fix) .) . (. expr) . TransposeShaxprF Nothing
-  dotGeneral d x y = Shaxpr . Fix $ DotGeneralShaxprF Nothing d (expr x) (expr y)
+  reshape = ((Shaxpr . Fix) .) . (. expr) . ReshapeShaxprF
+  broadcast ixs sh x = Shaxpr . Fix $ BroadcastShaxprF ixs sh (expr x)
+  slice sixs eixs x = Shaxpr . Fix $ SliceShaxprF sixs eixs (expr x)
+  pad lohi val x = Shaxpr . Fix $ PadShaxprF lohi val (expr x)
+  reduceSum ixs x = Shaxpr . Fix $ ReduceSumShaxprF ixs (expr x)
+  transpose = ((Shaxpr . Fix) .) . (. expr) . TransposeShaxprF
+  dotGeneral d x y = Shaxpr . Fix $ DotGeneralShaxprF d (expr x) (expr y)

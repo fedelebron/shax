@@ -1,68 +1,68 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module TypeInference (inferTypes, checkDefArgumentTypes) where
 
-import Binding
 import Control.Monad
 import Control.Monad.Except (MonadError, throwError)
 import Control.Monad.State
 import Data.List (sort, (\\))
 import qualified Data.Map as M
+import GHC.Stack
+import Text.PrettyPrint.HughesPJClass
+import Control.Lens hiding (op)
+
+
+import Bind
+import qualified Environment as E
 import Definition
 import Error
-import GHC.Stack
 import Shaxpr
-import Text.PrettyPrint.HughesPJClass
 import Types
+import Tensor
 
-type BindingState = M.Map VarName (ShaxprF VarName)
+data BindingState = BindingState {
+  _labelToType :: M.Map VarName TensorType,
+  _bindEnv :: E.Env Binding
+}
+makeLenses 'BindingState
+
 
 type BindingComputation = StateT BindingState (Either Error)
 
-inferTypes :: HasCallStack => Definition -> Either Error Definition
+inferTypes :: HasCallStack => Def VarName -> Either Error Definition
 inferTypes defn = do
   let oldBinds = defBinds defn
-      initialState = M.empty
-  newBinds <- execStateT (mapM_ typeBind oldBinds) initialState
-  let newBinds' = [Binding v e | (v, e) <- M.toList newBinds]
-  return $ defn {defBinds = newBinds'}
+      initialState = BindingState M.empty E.empty
+  finalState <- execStateT (mapM_ typeBind oldBinds) initialState
+  case mapM (`M.lookup` (view labelToType finalState)) (defRet defn) of
+    Just tys -> 
+      return $ Def {
+        defName = defName defn,
+        defArgTys = defArgTys defn,
+        defRet = zipWith Var (defRet defn) tys,
+        defBinds = E.toBindings (view bindEnv finalState)
+      }
+    Nothing -> throwError (Error "Failed to type return bindings." callStack)
   where
     paramTypes = M.fromList (zip [0 ..] (defArgTys defn))
-    typeBind :: Binding -> BindingComputation ()
-    typeBind b@(Binding v ex@(ShaxprF mty op args)) = do
-      s <- get
-
-      argTys <- lift $ mapM (lookupVariableType s) args
+    typeBind :: Bind VarName -> BindingComputation ()
+    typeBind b@(Bind vn (ShaxprF op args)) = do
+      argTys <-  mapM lookupVariableType args
       correctType <- prependToErrors ("While typing " ++ prettyShow b ++ ": ")
                      . lift
                      $ inferExprType paramTypes op argTys
+      let v' = Var vn correctType
+      bindEnv %= E.insert v' (Bind v' (ShaxprF op (zipWith Var args argTys)))
+      labelToType %= M.insert vn correctType
 
-      s' <- case mty of
-        Just existingType ->
-          if existingType == correctType
-            then return (M.insert v ex s)
-            else
-              throwError $
-                Error
-                  ( "Invalid existing type for "
-                      ++ prettyShow b
-                      ++ ", was "
-                      ++ prettyShow existingType
-                      ++ ", but inferred type is "
-                      ++ show correctType
-                  )
-                  callStack
-        Nothing -> return $ M.insert v (ShaxprF (Just correctType) op args) s
-      put s'
-
-lookupVariableType :: (HasCallStack) => BindingState -> VarName -> Either Error TensorType
-lookupVariableType s vn = do
-  case M.lookup vn s of
-    Nothing -> Left $ Error ("Undefined variable " ++ prettyShow vn) callStack
-    Just e@(ShaxprF mt _ _) -> case mt of
-      Nothing -> Left $ Error ("Internal error! " ++ prettyShow e ++ " had no type!") callStack
-      Just t -> Right t
+lookupVariableType :: HasCallStack => VarName -> BindingComputation TensorType
+lookupVariableType vn = do
+  ty <- cannotFail (M.lookup vn <$> use labelToType)
+  case ty of
+    Nothing -> throwError $ Error ("Undefined variable " ++ prettyShow vn) callStack
+    Just t -> return t
 
 inferExprType :: HasCallStack => M.Map Int TensorType -> Op -> [TensorType] -> Either Error TensorType
 inferExprType paramTypes op argTys = case (op, argTys) of
@@ -70,7 +70,7 @@ inferExprType paramTypes op argTys = case (op, argTys) of
     case M.lookup k paramTypes of
       Nothing -> Left $ Error ("Invalid parameter number: " ++ show k ++ ". No such argument provided.") callStack
       Just ty -> Right ty
-  (Constant k, []) -> return (someArrayType k)
+  (Constant k, []) -> return (tensorType k)
   (UnaryPointwise _, [x]) -> return x
   (op@(BinaryPointwise _), [x, y]) -> broadcastSemantics x y
   (Reshape sh, [TensorType bt sh']) -> do
@@ -178,9 +178,9 @@ padToSameLength xs ys =
         replicate (nx - ny) 1 ++ ys
       )
 
-checkDefArgumentTypes :: (HasCallStack) => [SomeArray] -> Definition -> Either Error ()
+checkDefArgumentTypes :: (HasCallStack) => [Tensor] -> Definition -> Either Error ()
 checkDefArgumentTypes args def =
-  let argTys = map someArrayType args
+  let argTys = map tensorType args
       paramTys = defArgTys def
    in assertTrue (argTys == paramTys) $
         Error

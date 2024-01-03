@@ -16,38 +16,39 @@
 module Linearize (linearize, LinearizedDefinition(..), evalLinearizedDefinition) where
 
 import GHC.Stack
+import qualified Data.Map as M
+import qualified Data.Array.Dynamic as D
+import Control.Monad.Except (throwError)
+import Text.PrettyPrint.HughesPJClass (Pretty, pPrintPrec, pPrint, prettyShow, vcat)
+import Data.Maybe (fromJust)
+import Control.Monad
+import Control.Monad.State
+
+import qualified Environment as E
 import Types
 import Definition
 import Error
 import TypeInference (checkDefArgumentTypes)
-import qualified Environment as E
-import qualified Data.Map as M
-import qualified Data.Array.Dynamic as D
 import qualified BiMap as B
-import Control.Monad.Except (throwError)
-import Text.PrettyPrint.HughesPJClass (Pretty, pPrintPrec, pPrint, prettyShow, vcat)
-
-import Control.Monad
 import Eval (evalFunc, evalDefinition)
-import Binding
+import Bind
 import Shaxpr
-import Control.Monad.State
 import Control.Lens hiding (op)
 import BindingMonad
-import Data.Maybe (fromJust)
+import Tensor
 
-type TangentVarName = VarName
+type TangentVar = Var
 
 data LinearizationState = LinearizationState {
   -- Maps a variable in the primal program to 
   -- its corresponding variable in the linear program.
   -- In YOLO parlance, this maps u to \dot{u}.
-  _primalToTangent :: E.Env TangentVarName,
+  _primalToTangent :: E.Env TangentVar,
 
   -- In YOLO parlance, this maps the returned `du` in the
   -- primal program, to the variable in the tangent program
   -- that reads `du` from the passed environment.
-  _nonLinearToLinear :: E.Env TangentVarName,
+  _nonLinearToLinear :: E.Env TangentVar,
 
   -- Bindings for the tangent program.
   _tangentBindings :: E.Env Binding,
@@ -65,31 +66,32 @@ makeLenses 'LinearizationState
 type LinearizationComputation r = BindingMonadComputation LinearizationState r
 type LinearMapper = BindingMapper LinearizationState
 
-newTangentBinding :: ShaxprF TangentVarName -> LinearizationComputation TangentVarName
-newTangentBinding expr = do
+newTangentBinding :: TensorType -> ShaxprF TangentVar -> LinearizationComputation TangentVar
+newTangentBinding ty expr = do
   tBinds <- use (extra . tangentBindings)
-  let nn = E.nextName tBinds :: TangentVarName
-  extra . tangentBindings %= E.insert nn (Binding nn expr)
-  return nn
+  let nn = E.nextName tBinds
+      v = Var nn ty :: TangentVar
+  extra . tangentBindings %= E.insert v (Bind v expr)
+  return v
 
-getLinearFromEnvironment :: HasCallStack => VarName -> LinearizationComputation TangentVarName
+getLinearFromEnvironment :: HasCallStack => Var -> LinearizationComputation TangentVar
 getLinearFromEnvironment v = do
   primalBinding <- (>>= lift) (E.lookup v <$> use env)
-  let tt = fromJust . exprTy . bindExpr $ primalBinding
+  let tt = varType (bindVar primalBinding)
   varMap <- use (extra . nonLinearToLinear)
   case E.lookup v varMap of
     Right w -> return w
     Left _ -> do
-      expr <- ParamShaxprF (Just tt) <$> (extra . nextLinearParameter <<+= 1)
+      expr <- ParamShaxprF <$> (extra . nextLinearParameter <<+= 1)
       extra . environmentTypes %= (tt:)
-      p <- newTangentBinding expr
+      p <- newTangentBinding tt expr
       extra . nonLinearToLinear %= E.insert v p
       return p
 
-getTangentForPrimal :: VarName -> LinearizationComputation TangentVarName
+getTangentForPrimal :: Var -> LinearizationComputation TangentVar
 getTangentForPrimal v = use (extra . primalToTangent) >>= lift . E.lookup v
 
-setTangentForPrimal :: VarName -> TangentVarName -> LinearizationComputation ()
+setTangentForPrimal :: Var -> TangentVar -> LinearizationComputation ()
 setTangentForPrimal v dotv = cannotFail (extra . primalToTangent %= E.insert v dotv)
 
 data LinearizedDefinition = LinearizedDefinition {
@@ -104,7 +106,7 @@ instance Pretty LinearizedDefinition where
   pPrintPrec k level (LinearizedDefinition nl l _) = vcat [pPrintPrec k level nl,
                                                            pPrintPrec k level l]
 
-evalLinearizedDefinition :: LinearizedDefinition -> [SomeArray] -> [SomeArray] -> Either Error ([SomeArray], [SomeArray])
+evalLinearizedDefinition :: LinearizedDefinition -> [Tensor] -> [Tensor] -> Either Error ([Tensor], [Tensor])
 evalLinearizedDefinition def x dx = do
   allRet <- evalDefinition (nonlinear def) x
   let (y, env) = splitAt (length allRet - envSize def) allRet
@@ -127,7 +129,7 @@ linearize def = do
   }
 
   returnedTangents <- mapM (`E.lookup` (finalState ^. primalToTangent)) (defRet nonLinearDef)
-  let linearDef = Definition {
+  let linearDef = Def {
     defName = "d" ++ defName def,
     defArgTys = defArgTys def ++ reverse (finalState ^. environmentTypes),
     defRet = returnedTangents,
@@ -136,21 +138,20 @@ linearize def = do
   let eSize = length (finalState ^. environmentTypes)
   return $ LinearizedDefinition nonLinearDef' linearDef eSize
 
-recordTangents :: (Binding -> LinearizationComputation (VarName, TangentVarName)) -> LinearMapper
+recordTangents :: (Binding -> LinearizationComputation (Var, TangentVar)) -> LinearMapper
 recordTangents f v = do
   (w, dotw) <- f v
   setTangentForPrimal w dotw
   return w
 
-linearizeBinding :: HasCallStack => Binding -> LinearizationComputation (VarName, TangentVarName)
-linearizeBinding b@(Binding _ (ShaxprF Nothing _ _)) = throwError $ Error ("Cannot linearize an untyped binding: " ++ prettyShow b) callStack
-linearizeBinding b@(Binding v (ShaxprF mty@(Just t) op args)) = do
+linearizeBinding :: HasCallStack => Binding -> LinearizationComputation (Var, TangentVar)
+linearizeBinding b@(Bind v@(Var _ t) (ShaxprF op args)) = do
   dargs <- mapM getTangentForPrimal args
   case (op, args, dargs) of
     (_, xs, dxs) | isLinearFunc op -> do
       -- If f(x) is linear, then f'(x)(dx) = f(dx).
-      y <- newBind (ShaxprF mty op xs)
-      dy <- newTangentBinding (ShaxprF mty op dxs)
+      y <- newBind t (ShaxprF op xs)
+      dy <- newTangentBinding t (ShaxprF op dxs)
 
       return (y, dy)      
     (Param k, [], []) -> do
@@ -159,51 +160,51 @@ linearizeBinding b@(Binding v (ShaxprF mty@(Just t) op args)) = do
       -- tangent with respect to that argument. This is because the first n indices
       -- of the linear program's arguments correspond to the tangents of all n
       -- indices of the primal program's arguments.
-      x <- newBind (ParamShaxprF mty k)
-      dx <- newTangentBinding (ParamShaxprF mty k)
+      x <- newBind t (ParamShaxprF k)
+      dx <- newTangentBinding t (ParamShaxprF k)
       return (x, dx)
 
     (UnaryPointwise Sin, [x], [dx]) -> do
       -- If f(x) = sin(x), then f'(x)(dx) = cos(x) * dx.
-      sinx <- newBind (SinShaxprF mty x)
+      sinx <- newBind t (SinShaxprF x)
 
-      cosx <- newBind (CosShaxprF mty x)
+      cosx <- newBind t (CosShaxprF x)
       cosx' <- getLinearFromEnvironment cosx
-      sinx' <- newTangentBinding (MulShaxprF mty cosx' dx)
+      sinx' <- newTangentBinding t (MulShaxprF cosx' dx)
   
       return (sinx, sinx')
 
     (UnaryPointwise Cos, [x], [dx]) -> do
       -- If f(x) = cos(x), then f'(x)(dx) = -sin(x) * dx.
-      cosx <- newBind (CosShaxprF mty x)
+      cosx <- newBind t (CosShaxprF x)
 
-      sinx <- newBind (SinShaxprF mty x)
-      negsinx <- newBind (NegateShaxprF mty sinx)
+      sinx <- newBind t (SinShaxprF x)
+      negsinx <- newBind t (NegateShaxprF sinx)
 
       negsinx' <- getLinearFromEnvironment negsinx
-      cosx' <- newTangentBinding (MulShaxprF mty negsinx' dx)
+      cosx' <- newTangentBinding t (MulShaxprF negsinx' dx)
 
       return (cosx, cosx')
     (UnaryPointwise Exp, [x], [dx]) -> do
       -- If f(x) = e^x, then f'(x)(dx) = e^x * dx.
-      expx <- newBind (ExpShaxprF mty x)
+      expx <- newBind t (ExpShaxprF x)
 
       expx' <- getLinearFromEnvironment expx
-      expdx <- newTangentBinding (MulShaxprF mty expx' dx)
+      expdx <- newTangentBinding t (MulShaxprF expx' dx)
 
       return (expx, expdx)
     (BinaryPointwise Mul, [x, y], [dx, dy]) -> do
       -- If f(x, y) = x * y, then f'(x, y)(dx, dy) = y * dx + x * dy.
       -- By convention, we only put tangents on the right argument,
       -- while the left argument is a primal value, read from the environment.
-      xy <- newBind (MulShaxprF mty x y)
+      xy <- newBind t (MulShaxprF x y)
 
       x' <- getLinearFromEnvironment x
       y' <- getLinearFromEnvironment y
-      x'dy <- newTangentBinding (MulShaxprF mty x' dy)
-      y'dx <- newTangentBinding (MulShaxprF mty y' dx)
+      x'dy <- newTangentBinding t (MulShaxprF x' dy)
+      y'dx <- newTangentBinding t (MulShaxprF y' dx)
 
-      xy' <- newTangentBinding (AddShaxprF mty x'dy y'dx)
+      xy' <- newTangentBinding t (AddShaxprF x'dy y'dx)
 
       return (xy, xy')
     (BinaryPointwise Div, [x, y], [dx, dy]) -> do
@@ -212,32 +213,32 @@ linearizeBinding b@(Binding v (ShaxprF mty@(Just t) op args)) = do
       --                      = (dx * y - x * dy) / y^2
       --                      = (y * dx - x * dy) / y^2
       -- This is valid only when y != 0.
-      xdivy <- newBind (DivShaxprF mty x y)
+      xdivy <- newBind t (DivShaxprF x y)
 
       x' <- getLinearFromEnvironment x
       y' <- getLinearFromEnvironment y
 
-      ydx <- newTangentBinding (MulShaxprF mty y' dx)
-      xdy <- newTangentBinding (MulShaxprF mty x' dy)
-      numerator <- newTangentBinding (SubShaxprF mty ydx xdy)
-      denominator <- newTangentBinding (MulShaxprF mty y' y')
-      xdivy' <- newTangentBinding (DivShaxprF mty numerator denominator)
+      ydx <- newTangentBinding t (MulShaxprF y' dx)
+      xdy <- newTangentBinding t (MulShaxprF x' dy)
+      numerator <- newTangentBinding t (SubShaxprF ydx xdy)
+      denominator <- newTangentBinding t (MulShaxprF y' y')
+      xdivy' <- newTangentBinding t (DivShaxprF numerator denominator)
 
       return (xdivy, xdivy')
     (Constant k, [], []) -> do
       -- If f(x) = k, then f'(x_0)(dx) = 0.
-      constant <- newBind (ConstantShaxprF mty k)
-      zero <- newTangentBinding (ConstantShaxprF mty (zeroLike k))
+      constant <- newBind t (ConstantShaxprF k)
+      zero <- newTangentBinding t (ConstantShaxprF (zeroLike k))
 
       return (constant, zero)
     (DotGeneral dims, [x, y], [dx, dy]) -> do
-      adotb <- newBind (DotGeneralShaxprF mty dims x y)
+      adotb <- newBind t (DotGeneralShaxprF dims x y)
 
       x' <- getLinearFromEnvironment x
       y' <- getLinearFromEnvironment y
-      a <- newTangentBinding (DotGeneralShaxprF mty dims x' dy)
-      b <- newTangentBinding (DotGeneralShaxprF mty dims dx y')
-      adotb' <- newTangentBinding (AddShaxprF mty a b)
+      a <- newTangentBinding t (DotGeneralShaxprF dims x' dy)
+      b <- newTangentBinding t (DotGeneralShaxprF dims dx y')
+      adotb' <- newTangentBinding t (AddShaxprF a b)
 
       return (adotb, adotb')
     _ -> throwError $ Error ("Unimplemented lineariation for " ++ prettyShow b) callStack
@@ -276,7 +277,7 @@ linearizeBinding (Binding v e@(ShaxprF mty op args)) = do
   setPrimalValue v res
   linearizeFunc mty op primalVals args
 
-linearizeFunc :: HasCallStack => Maybe TensorType -> Op -> [SomeArray] -> [TangentVarName] -> LinearizationComputation VarName
+linearizeFunc :: HasCallStack => Maybe TensorType -> Op -> [Tensor] -> [TangentVarName] -> LinearizationComputation VarName
 linearizeFunc mty op primals tangents = case (op, primals, tangents) of
   (_, _, dxs) | isLinearFunc op -> do
     newBind (ShaxprF mty op dxs)
@@ -324,8 +325,8 @@ linearizeFunc mty op primals tangents = case (op, primals, tangents) of
     -- If f(x) = k, then f'(x_0)(dx) = 0.
     newBind (ConstantShaxprF mty (zeroLike k))
   (DotGeneral dims, [x0, y0], [dx, dy]) -> do
-    x0c <- newBind (ConstantShaxprF (Just (someArrayType x0)) x0)
-    y0c <- newBind (ConstantShaxprF (Just (someArrayType y0)) y0)
+    x0c <- newBind (ConstantShaxprF (Just (TensorType x0)) x0)
+    y0c <- newBind (ConstantShaxprF (Just (TensorType y0)) y0)
     a <- newBind (DotGeneralShaxprF mty dims x0c dy)
     b <- newBind (DotGeneralShaxprF mty dims dx y0c)
     newBind (AddShaxprF mty a b)
