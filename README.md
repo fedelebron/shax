@@ -71,6 +71,8 @@ Minimum location: [fromList [] [0.23235208],fromList [] [-1.0176479]]
 Minimum value: -0.5
 ```
 
+If you're wondering how sharing of the variable `z` is recovered as `x2`, even though we used tracing, read [Implementing Explicit and Finding Implicit Sharing in Embedded DSLs](https://arxiv.org/pdf/1109.0784.pdf) by Oleg Kiselyov.
+
 We can also see it perform tracing, type inference, linearization, and transposition:
 
 ```haskell

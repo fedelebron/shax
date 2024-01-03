@@ -255,7 +255,6 @@ instance Closable [Shaxpr] where
   close' = const id
 
 instance (Closable b) => Closable ( Shaxpr -> b) where
-  close' :: Closable b => Int -> ( Shaxpr -> b) -> [Shaxpr]
   close' k f = close' (k + 1) (f ( Shaxpr (Fix (ParamShaxprF k))))
 
 close :: (Closable t) => t -> [Shaxpr]
