@@ -17,7 +17,7 @@ data Def v = Def {
   defBinds :: [Bind v],
   defRet :: [v]
 } deriving Show
-instance Pretty v => Pretty (Def v) where
+instance (PrettyVar v, Pretty v) => Pretty (Def v) where
   pPrintPrec k' l (Def name argTys binds ret) =
     let args = [text "arg" <> int k <> text " :: " <> pPrint argTy | (k, argTy) <- zip [0.. ] argTys]
         args' = punctuate (text ", ") args

@@ -28,9 +28,21 @@ newtype VarName = VarName {
 instance Pretty VarName where
   pPrint (VarName x) = text "x" <> int x
 
+class PrettyVar v where
+  prettyVar :: v -> Doc
+
+instance PrettyVar VarName where
+  prettyVar = pPrint
+
+
 data Var = Var {
   varName :: VarName,
   varType :: TensorType
 } deriving (Eq, Show, Ord)
 instance Pretty Var where
-  pPrint (Var name ty) = pPrint name <> text " :: " <> pPrint ty 
+  pPrint (Var name _) = pPrint name
+
+instance PrettyVar Var where
+  prettyVar v = hcat [pPrint (varName v),
+                      text " :: ",
+                      pPrint (varType v)]

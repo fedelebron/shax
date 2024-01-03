@@ -14,5 +14,7 @@ data Bind v = Bind {
 
 type Binding = Bind Var
 
-instance Pretty v => Pretty (Bind v) where
-  pPrintPrec l k (Bind v ex) = pPrint v <> text " = " <> pPrintPrec l k ex
+instance (Pretty v, PrettyVar v) => Pretty (Bind v) where
+  pPrintPrec l k (Bind v ex) = hcat [prettyVar v,
+                                     text " = ",
+                                     pPrintPrec l k ex]
