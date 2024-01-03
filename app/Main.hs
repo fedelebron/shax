@@ -41,8 +41,10 @@ medium x0 x8 =
             x9 = x7 * x8
             x10 = x7 + x8
             x11 = min x9 x10
-            x12 = reduceSum [0] x11
-         in x12
+            x12 = max x9 x10
+            x13 = x12 - x11
+            x14 = reduceSum [0] x13
+         in x14
 
 linearizationDemo :: IO ()
 linearizationDemo = do

@@ -244,55 +244,12 @@ linearizeBinding b@(Bind v@(Var _ t) (ShaxprF op args)) = do
 
       return (adotb, adotb')
     (BinaryPointwise Min, [x, y], [dx, dy]) -> do
-      -- Let f(x, y) = min(x, y).
-      -- Then f'(x_0, y_0)(dx, dy) = dx * (df/dx)(x_0, y_0) + dy * (df/dy)(x_0, y_0)
-      -- Take coordinate i. Say x_0_i < y_0_i.
-      -- Then f(x_0, y_0)_i = min(x_0, y_0)_i = x_0_i.
-      -- Thus (df/dx)_i = 1, (df/dy)_i = 0.
-      -- Else, say y_0_i < x_0_i. Then (df/dx)_i = 0, (df/dy)_i = 1.
-      -- We want it to be the case that if x_0_i = y_0_i, then
-      -- (df/dx)_i = (df/dy)_i = 1/2, as if for this coordinate, f_i(x, y) = (x+y)/2.
-      -- We accomplish this using a vector m, where each m_i is either 0, 1/2, or 1,
-      -- such that
-      -- f'(x_0, y_0)(dx, dy) = dx * m + dy * (1-m).
-      -- Note the mask `m` is computed in the primal program, while the multiplications and
-      -- additions are computed in the linear program.
-
-      -- From the typechecker, we know x and y are float tensors.
       z <- newBind (varType x) (MinShaxprF x y)
+      linearizeMinMax z x y dx dy
 
-      let constType = varType x
-          constShape = tyShape constType
-          maskType = constType
-          boolType = TensorType TBool constShape
-          scalarType = TensorType (tyBase constType) []
-
-      let scalarConstType = TensorType (tyBase constType) []
-      zero <- newBind scalarType (ConstantShaxprF (fromFloatScalar 0.0))
-      one <- newBind scalarType (ConstantShaxprF (fromFloatScalar 1.0))
-      two <- newBind scalarType (ConstantShaxprF (fromFloatScalar 2.0))
-  
-      zeros <- newBind constType (BroadcastShaxprF [] constShape zero)
-      ones <- newBind constType (BroadcastShaxprF [] constShape one)
-      twos <- newBind constType (BroadcastShaxprF [] constShape two)
-
-      topEq <- newBind boolType (EqShaxprF z x)
-      top <- newBind constType (SelectShaxprF topEq ones zeros)
-
-      bottomEq <- newBind boolType (EqShaxprF z y)
-      bottom <- newBind constType (SelectShaxprF bottomEq twos ones)
-
-      multiplier <- newBind maskType (DivShaxprF top bottom)
-      negMultiplier <- newBind maskType (SubShaxprF ones multiplier)
-
-      multiplier' <- getLinearFromEnvironment multiplier
-      negMultiplier' <- getLinearFromEnvironment negMultiplier
-
-      left <- newTangentBinding constType (MulShaxprF multiplier' dx)
-      right <- newTangentBinding constType (MulShaxprF negMultiplier' dy)
-      dz <- newTangentBinding constType (AddShaxprF left right)
-
-      return (z, dz)
+    (BinaryPointwise Max, [x, y], [dx, dy]) -> do
+      z <- newBind (varType x) (MaxShaxprF x y)
+      linearizeMinMax z x y dx dy
 
     _ -> throwError $ Error ("Unimplemented lineariation for " ++ prettyShow b) callStack
 
@@ -309,124 +266,51 @@ isLinearFunc (ReduceSum _) = True
 isLinearFunc (Transpose _) = True
 isLinearFunc _ = False    
 
-      
-  
+linearizeMinMax :: Var -> Var -> Var -> TangentVar -> TangentVar -> LinearizationComputation (Var, TangentVar)
+linearizeMinMax z x y dx dy = do
+  -- Let f(x, y) = min(x, y).
+  -- Then f'(x_0, y_0)(dx, dy) = dx * (df/dx)(x_0, y_0) + dy * (df/dy)(x_0, y_0)
+  -- Take coordinate i. Say x_0_i < y_0_i.
+  -- Then f(x_0, y_0)_i = min(x_0, y_0)_i = x_0_i.
+  -- Thus (df/dx)_i = 1, (df/dy)_i = 0.
+  -- Else, say y_0_i < x_0_i. Then (df/dx)_i = 0, (df/dy)_i = 1.
+  -- We want it to be the case that if x_0_i = y_0_i, then
+  -- (df/dx)_i = (df/dy)_i = 1/2, as if for this coordinate, f_i(x, y) = (x+y)/2.
+  -- We accomplish this using a vector m, where each m_i is either 0, 1/2, or 1,
+  -- such that
+  -- f'(x_0, y_0)(dx, dy) = dx * m + dy * (1-m).
+  -- Note the mask `m` is computed in the primal program, while the multiplications and
+  -- additions are computed in the linear program.
+  -- From the typechecker, we know x and y are float tensors.
+  let constType = varType x
+      constShape = tyShape constType
+      maskType = constType
+      boolType = TensorType TBool constShape
+      scalarType = TensorType (tyBase constType) []
 
-{-
-linearizeBinding :: HasCallStack => LinearMapper 
-linearizeBinding (Binding v e@(ShaxprF mty op args)) = do
-  -- We get the primal values for all the arguments, and evaluate the
-  -- function, to get its result.
-  point <- use (extra . p)
-  primals' <- use (extra . primalValues)
-  remaps <- use remap
-  primalVars <- case mapM (`B.lookupKey` remaps) args of
-                  Just xs -> return xs
-                  Nothing -> throwError $ Error ("Could not find primal variables corresponding to tangents: " ++ prettyShow args) callStack
-  primalVals <- lift $ mapM (`E.lookup` primals') primalVars
-  let res = case op of
-              Param k -> point !! k
-              _ -> evalFunc op primalVals
-  setPrimalValue v res
-  linearizeFunc mty op primalVals args
+  let scalarConstType = TensorType (tyBase constType) []
+  zero <- newBind scalarType (ConstantShaxprF (fromFloatScalar 0.0))
+  one <- newBind scalarType (ConstantShaxprF (fromFloatScalar 1.0))
+  two <- newBind scalarType (ConstantShaxprF (fromFloatScalar 2.0))
 
-linearizeFunc :: HasCallStack => Maybe TensorType -> Op -> [Tensor] -> [TangentVarName] -> LinearizationComputation VarName
-linearizeFunc mty op primals tangents = case (op, primals, tangents) of
-  (_, _, dxs) | isLinearFunc op -> do
-    newBind (ShaxprF mty op dxs)
-  (UnaryPointwise Sin, [x0], [dx]) -> do
-    -- If f(x) = sin(x), then f'(x_0)(dx) = cos(x_0) * dx.
-    a <- newBind (ConstantShaxprF mty x0)
-    b <- newBind (CosShaxprF mty a)
-    newBind (MulShaxprF mty b dx)
-  (UnaryPointwise Cos, [x0], [dx]) -> do
-    -- If f(x) = cos(x), then f'(x_0)(dx) = -cos(x_0) * dx.
-    a <- newBind (ConstantShaxprF mty x0)
-    b <- newBind (SinShaxprF mty a)
-    c <- newBind (NegateShaxprF mty b)
-    newBind (MulShaxprF mty c dx)
-  (UnaryPointwise Exp, [x0], [dx]) -> do
-    -- If f(x) = e^x, then f'(x_0)(dx) = e^{x_0} * dx.
-    a <- newBind (ConstantShaxprF mty x0)
-    b <- newBind (ExpShaxprF mty a)
-    newBind (MulShaxprF mty b dx)
-  (BinaryPointwise Mul, [x0, y0], [dx, dy]) -> do
-    -- If f(x, y) = x * y, then f'(x_0, y_0)(dx, dy) = y_0 * dx + x_0 * dy.
-    -- By convention, we only put tangents on the right argument,
-    -- while the left argument is a primal.
-    a <- newBind (ConstantShaxprF mty y0)
-    b <- newBind (MulShaxprF mty a dx)
-    c <- newBind (ConstantShaxprF mty x0)
-    d <- newBind (MulShaxprF mty c dy)
-    newBind (AddShaxprF mty b d)
-  (BinaryPointwise Div, [x0, y0], [dx, dy]) -> do
-    -- If f(x, y) = x / y, then
-    -- f'(x_0, y_0)(dx, dy) = dx/d_0 - x_0 dy / y_0^2.
-    --                      = (dx * y_0 - x_0 * dy) / y_0^2
-    --                      = (y_0 * dx - x_0 * dy) / y_0^2
-    -- This is valid only when y_0 != 0.
-    assertTrue (0.0 `notElem` toFloatList y0) $ Error ("Division by zero in linearization of division.") callStack
-    do
-      a <- newBind (ConstantShaxprF mty y0)
-      b <- newBind (MulShaxprF mty a dx)
-      c <- newBind (ConstantShaxprF mty x0)
-      d <- newBind (MulShaxprF mty c dy)
-      e <- newBind (SubShaxprF mty b d)
-      f <- newBind (MulShaxprF mty a a)
-      newBind (DivShaxprF mty e f)
-  (Constant k, [], []) -> do
-    -- If f(x) = k, then f'(x_0)(dx) = 0.
-    newBind (ConstantShaxprF mty (zeroLike k))
-  (DotGeneral dims, [x0, y0], [dx, dy]) -> do
-    x0c <- newBind (ConstantShaxprF (Just (TensorType x0)) x0)
-    y0c <- newBind (ConstantShaxprF (Just (TensorType y0)) y0)
-    a <- newBind (DotGeneralShaxprF mty dims x0c dy)
-    b <- newBind (DotGeneralShaxprF mty dims dx y0c)
-    newBind (AddShaxprF mty a b)
-  (BinaryPointwise Min, [x0, y0], [dx, dy]) -> do
-    -- Let f(x, y) = min(x, y).
-    -- Then f'(x_0, y_0)(dx, dy) = dx * (df/dx)(x_0, y_0) + dy * (df/dy)(x_0, y_0)
-    -- Take coordinate i. Say x_0_i < y_0_i.
-    -- Then f(x_0, y_0)_i = min(x_0, y_0)_i = x_0_i.
-    -- Thus (df/dx)_i = 1, (df/dy)_i = 0.
-    -- Else, say y_0_i < x_0_i. Then (df/dx)_i = 0, (df/dy)_i = 1.
-    -- We want it to be the case that if x_0_i = y_0_i, then
-    -- (df/dx)_i = (df/dy)_i = 1/2, as if for this coordinate, f_i(x, y) = (x+y)/2.
-    -- We accomplish this using a vector m, where each m_i is either 0, 1/2, or 1,
-    -- such that
-    -- f'(x_0, y_0)(dx, dy) = dx * m + dy * (1-m).
-    case (x0, y0) of
-      (FloatArray x0s, FloatArray y0s) -> do
-        let mask = FloatArray (D.zipWithA balancedMinMask x0s y0s)
-            ones = FloatArray (D.constant (D.shapeL x0s) 1.0)
-        maskVar <- newBind (ConstantShaxprF mty mask)
-        a <- newBind (MulShaxprF mty maskVar dx)
-        onesVar <- newBind (ConstantShaxprF mty ones)
-        negMaskVar <- newBind (SubShaxprF mty onesVar maskVar)
-        b <- newBind (MulShaxprF mty negMaskVar dy)
-        newBind (AddShaxprF mty a b)
-      _ -> throwError (Error "Cannot take derivative of integer min." callStack)
-  (BinaryPointwise Max, [x0, y0], [dx, dy]) -> do
-    case (x0, y0) of
-      (FloatArray x0s, FloatArray y0s) -> do
-        let mask = FloatArray (D.zipWithA balancedMinMask y0s x0s)
-            ones = FloatArray (D.constant (D.shapeL x0s) 1.0)
-        maskVar <- newBind (ConstantShaxprF mty mask)
-        a <- newBind (MulShaxprF mty maskVar dx)
-        onesVar <- newBind (ConstantShaxprF mty ones)
-        negMaskVar <- newBind (SubShaxprF mty onesVar maskVar)
-        b <- newBind (MulShaxprF mty negMaskVar dy)
-        newBind (AddShaxprF mty a b)
-      _ -> throwError (Error "Cannot take derivative of integer max." callStack)
-  _ -> throwError (Error ("Failed to linearize " ++ show op) callStack)
+  zeros <- newBind constType (BroadcastShaxprF [] constShape zero)
+  ones <- newBind constType (BroadcastShaxprF [] constShape one)
+  twos <- newBind constType (BroadcastShaxprF [] constShape two)
 
-balancedMinMask :: Float -> Float -> Float
-balancedMinMask x y =
-  case compare x y of
-    LT -> 1.0
-    EQ -> 0.5
-    GT -> 0.0
+  topEq <- newBind boolType (EqShaxprF z x)
+  top <- newBind constType (SelectShaxprF topEq ones zeros)
 
--}
+  bottomEq <- newBind boolType (EqShaxprF z y)
+  bottom <- newBind constType (SelectShaxprF bottomEq twos ones)
 
+  multiplier <- newBind maskType (DivShaxprF top bottom)
+  negMultiplier <- newBind maskType (SubShaxprF ones multiplier)
 
+  multiplier' <- getLinearFromEnvironment multiplier
+  negMultiplier' <- getLinearFromEnvironment negMultiplier
+
+  left <- newTangentBinding constType (MulShaxprF multiplier' dx)
+  right <- newTangentBinding constType (MulShaxprF negMultiplier' dy)
+  dz <- newTangentBinding constType (AddShaxprF left right)
+
+  return (z, dz)

@@ -76,7 +76,6 @@ We can also see it perform tracing, type inference, linearization, and transposi
 ```haskell
 medium :: forall a. (HNP a, Floating a) => a -> a -> a
 medium x0 x8 =
-medium x0 x8 =
         let x1 = broadcast [1] [2, 6] x0
             x2 = sin x1
             x3 = cos x2
@@ -85,8 +84,12 @@ medium x0 x8 =
             x6 = transpose [1, 0] x4
             x7 = x5 `dot` x6
             x9 = x7 * x8
-            x10 = reduceSum [0] x9
-         in x10
+            x10 = x7 + x8
+            x11 = min x9 x10
+            x12 = max x9 x10
+            x13 = x12 - x11
+            x14 = reduceSum [0] x13
+         in x14
 ```
 
 Here `HNP` acts as a standin for a NumPy-like API, providing `broadcast`, `transpose`, `dot`, and `reduceSum`.
@@ -105,8 +108,12 @@ def medium(arg0 :: f32[6],
       x7 = dot x5 x6
       x8 = arg1
       x9 = mul x7 x8
-      x10 = reduce_sum [0] x9
-  in [x10]
+      x10 = add x7 x8
+      x11 = max x9 x10
+      x12 = min x9 x10
+      x13 = sub x11 x12
+      x14 = reduce_sum [0] x13
+  in [x14]
 After type inference:
 def medium(arg0 :: f32[6], 
            arg1 :: f32[2, 2]) =
@@ -120,9 +127,13 @@ def medium(arg0 :: f32[6],
       x7 :: f32[2, 2] = dot x5 x6
       x8 :: f32[2, 2] = arg1
       x9 :: f32[2, 2] = mul x7 x8
-      x10 :: f32[2] = reduce_sum [0] x9
-  in [x10]
-After rewrites:
+      x10 :: f32[2, 2] = add x7 x8
+      x11 :: f32[2, 2] = max x9 x10
+      x12 :: f32[2, 2] = min x9 x10
+      x13 :: f32[2, 2] = sub x11 x12
+      x14 :: f32[2] = reduce_sum [0] x13
+  in [x14]
+After rewrites (canonicalizing `dot`s and lowering `reduce_sum` to pointwise `+` and `slice`):
 def medium(arg0 :: f32[6], 
            arg1 :: f32[2, 2]) =
   let x0 :: f32[6] = arg0
@@ -138,11 +149,15 @@ def medium(arg0 :: f32[6],
       x10 :: f32[2, 2] = reshape [2,2] x9
       x11 :: f32[2, 2] = arg1
       x12 :: f32[2, 2] = mul x10 x11
-      x13 :: f32[1, 2] = slice [0,0] [1,2] x12
-      x14 :: f32[1, 2] = slice [1,0] [2,2] x12
-      x15 :: f32[1, 2] = add x13 x14
-      x16 :: f32[2] = reshape [2] x15
-  in [x16]
+      x13 :: f32[2, 2] = add x10 x11
+      x14 :: f32[2, 2] = max x12 x13
+      x15 :: f32[2, 2] = min x12 x13
+      x16 :: f32[2, 2] = sub x14 x15
+      x17 :: f32[1, 2] = slice [0,0] [1,2] x16
+      x18 :: f32[1, 2] = slice [1,0] [2,2] x16
+      x19 :: f32[1, 2] = add x17 x18
+      x20 :: f32[2] = reshape [2] x19
+  in [x20]
 Linearized definition(s):
 def medium(arg0 :: f32[6], 
            arg1 :: f32[2, 2]) =
@@ -162,11 +177,39 @@ def medium(arg0 :: f32[6],
       x13 :: f32[2, 2] = reshape [2,2] x12
       x14 :: f32[2, 2] = arg1
       x15 :: f32[2, 2] = mul x13 x14
-      x16 :: f32[1, 2] = slice [0,0] [1,2] x15
-      x17 :: f32[1, 2] = slice [1,0] [2,2] x15
-      x18 :: f32[1, 2] = add x16 x17
-      x19 :: f32[2] = reshape [2] x18
-  in [x19, x3, x6, x8, x10, x11, x13, x14]
+      x16 :: f32[2, 2] = add x13 x14
+      x17 :: f32[2, 2] = max x15 x16
+      x18 :: f32[] = fromList [] [0.0]
+      x19 :: f32[] = fromList [] [1.0]
+      x20 :: f32[] = fromList [] [2.0]
+      x21 :: f32[2, 2] = broadcast [] [2,2] x18
+      x22 :: f32[2, 2] = broadcast [] [2,2] x19
+      x23 :: f32[2, 2] = broadcast [] [2,2] x20
+      x24 :: bool[2, 2] = eq x17 x15
+      x25 :: f32[2, 2] = select x24 x22 x21
+      x26 :: bool[2, 2] = eq x17 x16
+      x27 :: f32[2, 2] = select x26 x23 x22
+      x28 :: f32[2, 2] = div x25 x27
+      x29 :: f32[2, 2] = sub x22 x28
+      x30 :: f32[2, 2] = min x15 x16
+      x31 :: f32[] = fromList [] [0.0]
+      x32 :: f32[] = fromList [] [1.0]
+      x33 :: f32[] = fromList [] [2.0]
+      x34 :: f32[2, 2] = broadcast [] [2,2] x31
+      x35 :: f32[2, 2] = broadcast [] [2,2] x32
+      x36 :: f32[2, 2] = broadcast [] [2,2] x33
+      x37 :: bool[2, 2] = eq x30 x15
+      x38 :: f32[2, 2] = select x37 x35 x34
+      x39 :: bool[2, 2] = eq x30 x16
+      x40 :: f32[2, 2] = select x39 x36 x35
+      x41 :: f32[2, 2] = div x38 x40
+      x42 :: f32[2, 2] = sub x35 x41
+      x43 :: f32[2, 2] = sub x17 x30
+      x44 :: f32[1, 2] = slice [0,0] [1,2] x43
+      x45 :: f32[1, 2] = slice [1,0] [2,2] x43
+      x46 :: f32[1, 2] = add x44 x45
+      x47 :: f32[2] = reshape [2] x46
+  in [x47, x3, x6, x8, x10, x11, x13, x14, x28, x29, x41, x42]
 def dmedium(arg0 :: f32[6], 
             arg1 :: f32[2, 2], 
             arg2 :: f32[2, 6], 
@@ -175,7 +218,11 @@ def dmedium(arg0 :: f32[6],
             arg5 :: f32[1, 2, 6], 
             arg6 :: f32[1, 6, 2], 
             arg7 :: f32[2, 2], 
-            arg8 :: f32[2, 2]) =
+            arg8 :: f32[2, 2], 
+            arg9 :: f32[2, 2], 
+            arg10 :: f32[2, 2], 
+            arg11 :: f32[2, 2], 
+            arg12 :: f32[2, 2]) =
   let x0 :: f32[6] = arg0
       x1 :: f32[2, 6] = broadcast [1] [2,6] x0
       x2 :: f32[2, 6] = arg2
@@ -200,18 +247,30 @@ def dmedium(arg0 :: f32[6],
       x21 :: f32[2, 2] = mul x19 x18
       x22 :: f32[2, 2] = mul x20 x17
       x23 :: f32[2, 2] = add x21 x22
-      x24 :: f32[1, 2] = slice [0,0] [1,2] x23
-      x25 :: f32[1, 2] = slice [1,0] [2,2] x23
-      x26 :: f32[1, 2] = add x24 x25
-      x27 :: f32[2] = reshape [2] x26
-  in [x27]
+      x24 :: f32[2, 2] = add x17 x18
+      x25 :: f32[2, 2] = arg9
+      x26 :: f32[2, 2] = arg10
+      x27 :: f32[2, 2] = mul x25 x23
+      x28 :: f32[2, 2] = mul x26 x24
+      x29 :: f32[2, 2] = add x27 x28
+      x30 :: f32[2, 2] = arg11
+      x31 :: f32[2, 2] = arg12
+      x32 :: f32[2, 2] = mul x30 x23
+      x33 :: f32[2, 2] = mul x31 x24
+      x34 :: f32[2, 2] = add x32 x33
+      x35 :: f32[2, 2] = sub x29 x34
+      x36 :: f32[1, 2] = slice [0,0] [1,2] x35
+      x37 :: f32[1, 2] = slice [1,0] [2,2] x35
+      x38 :: f32[1, 2] = add x36 x37
+      x39 :: f32[2] = reshape [2] x38
+  in [x39]
 f(x):
 [┌───────────────────┐
- │ 73.46239 110.19358│
+ │34.731194  67.46239│
  └───────────────────┘]
 df(dx):
 [┌───────────────────┐
- │ 89.60969 134.41454│
+ │42.804844 120.34088│
  └───────────────────┘]
 Transposed definition(s):
 def medium(arg0 :: f32[6], 
@@ -232,11 +291,39 @@ def medium(arg0 :: f32[6],
       x13 :: f32[2, 2] = reshape [2,2] x12
       x14 :: f32[2, 2] = arg1
       x15 :: f32[2, 2] = mul x13 x14
-      x16 :: f32[1, 2] = slice [0,0] [1,2] x15
-      x17 :: f32[1, 2] = slice [1,0] [2,2] x15
-      x18 :: f32[1, 2] = add x16 x17
-      x19 :: f32[2] = reshape [2] x18
-  in [x19, x3, x6, x8, x10, x11, x13, x14]
+      x16 :: f32[2, 2] = add x13 x14
+      x17 :: f32[2, 2] = max x15 x16
+      x18 :: f32[] = fromList [] [0.0]
+      x19 :: f32[] = fromList [] [1.0]
+      x20 :: f32[] = fromList [] [2.0]
+      x21 :: f32[2, 2] = broadcast [] [2,2] x18
+      x22 :: f32[2, 2] = broadcast [] [2,2] x19
+      x23 :: f32[2, 2] = broadcast [] [2,2] x20
+      x24 :: bool[2, 2] = eq x17 x15
+      x25 :: f32[2, 2] = select x24 x22 x21
+      x26 :: bool[2, 2] = eq x17 x16
+      x27 :: f32[2, 2] = select x26 x23 x22
+      x28 :: f32[2, 2] = div x25 x27
+      x29 :: f32[2, 2] = sub x22 x28
+      x30 :: f32[2, 2] = min x15 x16
+      x31 :: f32[] = fromList [] [0.0]
+      x32 :: f32[] = fromList [] [1.0]
+      x33 :: f32[] = fromList [] [2.0]
+      x34 :: f32[2, 2] = broadcast [] [2,2] x31
+      x35 :: f32[2, 2] = broadcast [] [2,2] x32
+      x36 :: f32[2, 2] = broadcast [] [2,2] x33
+      x37 :: bool[2, 2] = eq x30 x15
+      x38 :: f32[2, 2] = select x37 x35 x34
+      x39 :: bool[2, 2] = eq x30 x16
+      x40 :: f32[2, 2] = select x39 x36 x35
+      x41 :: f32[2, 2] = div x38 x40
+      x42 :: f32[2, 2] = sub x35 x41
+      x43 :: f32[2, 2] = sub x17 x30
+      x44 :: f32[1, 2] = slice [0,0] [1,2] x43
+      x45 :: f32[1, 2] = slice [1,0] [2,2] x43
+      x46 :: f32[1, 2] = add x44 x45
+      x47 :: f32[2] = reshape [2] x46
+  in [x47, x3, x6, x8, x10, x11, x13, x14, x28, x29, x41, x42]
 def dmediumt(arg0 :: f32[2], 
              arg1 :: f32[2, 6], 
              arg2 :: f32[2, 6], 
@@ -244,7 +331,11 @@ def dmediumt(arg0 :: f32[2],
              arg4 :: f32[1, 2, 6], 
              arg5 :: f32[1, 6, 2], 
              arg6 :: f32[2, 2], 
-             arg7 :: f32[2, 2]) =
+             arg7 :: f32[2, 2], 
+             arg8 :: f32[2, 2], 
+             arg9 :: f32[2, 2], 
+             arg10 :: f32[2, 2], 
+             arg11 :: f32[2, 2]) =
   let x0 :: f32[2] = arg0
       x1 :: f32[2, 6] = arg1
       x2 :: f32[2, 6] = arg2
@@ -253,37 +344,50 @@ def dmediumt(arg0 :: f32[2],
       x5 :: f32[1, 6, 2] = arg5
       x6 :: f32[2, 2] = arg6
       x7 :: f32[2, 2] = arg7
-      x8 :: f32[1, 2] = reshape [1,2] x0
-      x9 :: f32[2, 2] = pad [(1,0),(0,0)] 0.0 x8
-      x10 :: f32[2, 2] = pad [(0,1),(0,0)] 0.0 x8
-      x11 :: f32[2, 2] = add x10 x9
-      x12 :: f32[2, 2] = mul x7 x11
-      x13 :: f32[2, 2] = mul x6 x11
-      x14 :: f32[1, 2, 2] = reshape [1,2,2] x12
-      x15 :: f32[1, 2, 6] = transpose [0,2,1] x5
-      x16 :: f32[1, 2, 6] = dot_general [2] [1] [0] [0] x14 x15
-      x17 :: f32[1, 6, 2] = transpose [0,2,1] x4
-      x18 :: f32[1, 6, 2] = dot_general [2] [1] [0] [0] x17 x14
-      x19 :: f32[6, 2] = reshape [6,2] x18
-      x20 :: f32[2, 6] = reshape [2,6] x16
-      x21 :: f32[2, 6] = transpose [1,0] x19
-      x22 :: f32[2, 6] = mul x3 x20
-      x23 :: f32[2, 6] = add x22 x21
-      x24 :: f32[2, 6] = mul x2 x23
-      x25 :: f32[2, 6] = add x24 x23
-      x26 :: f32[2, 6] = mul x1 x25
-      x27 :: f32[6] = reduce_sum [0] x26
-  in [x27, x13]
+      x8 :: f32[2, 2] = arg8
+      x9 :: f32[2, 2] = arg9
+      x10 :: f32[2, 2] = arg10
+      x11 :: f32[2, 2] = arg11
+      x12 :: f32[1, 2] = reshape [1,2] x0
+      x13 :: f32[2, 2] = pad [(1,0),(0,0)] 0.0 x12
+      x14 :: f32[2, 2] = pad [(0,1),(0,0)] 0.0 x12
+      x15 :: f32[2, 2] = add x14 x13
+      x16 :: f32[2, 2] = negate x15
+      x17 :: f32[2, 2] = mul x11 x16
+      x18 :: f32[2, 2] = mul x10 x16
+      x19 :: f32[2, 2] = mul x9 x15
+      x20 :: f32[2, 2] = mul x8 x15
+      x21 :: f32[2, 2] = add x19 x17
+      x22 :: f32[2, 2] = add x20 x18
+      x23 :: f32[2, 2] = mul x7 x22
+      x24 :: f32[2, 2] = mul x6 x22
+      x25 :: f32[2, 2] = add x24 x21
+      x26 :: f32[2, 2] = add x23 x21
+      x27 :: f32[1, 2, 2] = reshape [1,2,2] x26
+      x28 :: f32[1, 2, 6] = transpose [0,2,1] x5
+      x29 :: f32[1, 2, 6] = dot_general [2] [1] [0] [0] x27 x28
+      x30 :: f32[1, 6, 2] = transpose [0,2,1] x4
+      x31 :: f32[1, 6, 2] = dot_general [2] [1] [0] [0] x30 x27
+      x32 :: f32[6, 2] = reshape [6,2] x31
+      x33 :: f32[2, 6] = reshape [2,6] x29
+      x34 :: f32[2, 6] = transpose [1,0] x32
+      x35 :: f32[2, 6] = mul x3 x33
+      x36 :: f32[2, 6] = add x35 x34
+      x37 :: f32[2, 6] = mul x2 x36
+      x38 :: f32[2, 6] = add x37 x36
+      x39 :: f32[2, 6] = mul x1 x38
+      x40 :: f32[6] = reduce_sum [0] x39
+  in [x40, x25]
 f(x) (again):
 [┌───────────────────┐
- │ 73.46239 110.19358│
+ │34.731194  67.46239│
  └───────────────────┘]
 dft(ct):
 [┌─────────────────────────────────────────────────────────────────┐
- │115.209816 -75.218056 -415.83154 -76.830376  15.994818  301.46558│
+ │  71.61691 -46.757164 -258.48987 -47.759422   9.942725  187.39752│
  └─────────────────────────────────────────────────────────────────┘,
  ┌───────────────────┐
- │ 91.82799 165.29037│
- │ 91.82799 165.29037│
+ │-86.82799 156.29037│
+ │ 86.82799 156.29037│
  └───────────────────┘]
 ```
