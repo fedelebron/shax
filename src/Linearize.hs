@@ -232,6 +232,8 @@ linearizeBinding b@(Bind v@(Var _ t) (ShaxprF op args)) = do
 
       return (constant, zero)
     (DotGeneral dims, [x, y], [dx, dy]) -> do
+      -- If uhhh.... Trust Me Bro(tm), this is the correct
+      -- cotangent forwarding rule for DotGeneral.
       adotb <- newBind t (DotGeneralShaxprF dims x y)
 
       x' <- getLinearFromEnvironment x
@@ -241,6 +243,57 @@ linearizeBinding b@(Bind v@(Var _ t) (ShaxprF op args)) = do
       adotb' <- newTangentBinding t (AddShaxprF a b)
 
       return (adotb, adotb')
+    (BinaryPointwise Min, [x, y], [dx, dy]) -> do
+      -- Let f(x, y) = min(x, y).
+      -- Then f'(x_0, y_0)(dx, dy) = dx * (df/dx)(x_0, y_0) + dy * (df/dy)(x_0, y_0)
+      -- Take coordinate i. Say x_0_i < y_0_i.
+      -- Then f(x_0, y_0)_i = min(x_0, y_0)_i = x_0_i.
+      -- Thus (df/dx)_i = 1, (df/dy)_i = 0.
+      -- Else, say y_0_i < x_0_i. Then (df/dx)_i = 0, (df/dy)_i = 1.
+      -- We want it to be the case that if x_0_i = y_0_i, then
+      -- (df/dx)_i = (df/dy)_i = 1/2, as if for this coordinate, f_i(x, y) = (x+y)/2.
+      -- We accomplish this using a vector m, where each m_i is either 0, 1/2, or 1,
+      -- such that
+      -- f'(x_0, y_0)(dx, dy) = dx * m + dy * (1-m).
+      -- Note the mask `m` is computed in the primal program, while the multiplications and
+      -- additions are computed in the linear program.
+
+      -- From the typechecker, we know x and y are float tensors.
+      z <- newBind (varType x) (MinShaxprF x y)
+
+      let constType = varType x
+          constShape = tyShape constType
+          maskType = constType
+          boolType = TensorType TBool constShape
+          scalarType = TensorType (tyBase constType) []
+
+      let scalarConstType = TensorType (tyBase constType) []
+      zero <- newBind scalarType (ConstantShaxprF (fromFloatScalar 0.0))
+      one <- newBind scalarType (ConstantShaxprF (fromFloatScalar 1.0))
+      two <- newBind scalarType (ConstantShaxprF (fromFloatScalar 2.0))
+  
+      zeros <- newBind constType (BroadcastShaxprF [] constShape zero)
+      ones <- newBind constType (BroadcastShaxprF [] constShape one)
+      twos <- newBind constType (BroadcastShaxprF [] constShape two)
+
+      topEq <- newBind boolType (EqShaxprF z x)
+      top <- newBind constType (SelectShaxprF topEq ones zeros)
+
+      bottomEq <- newBind boolType (EqShaxprF z y)
+      bottom <- newBind constType (SelectShaxprF bottomEq twos ones)
+
+      multiplier <- newBind maskType (DivShaxprF top bottom)
+      negMultiplier <- newBind maskType (SubShaxprF ones multiplier)
+
+      multiplier' <- getLinearFromEnvironment multiplier
+      negMultiplier' <- getLinearFromEnvironment negMultiplier
+
+      left <- newTangentBinding constType (MulShaxprF multiplier' dx)
+      right <- newTangentBinding constType (MulShaxprF negMultiplier' dy)
+      dz <- newTangentBinding constType (AddShaxprF left right)
+
+      return (z, dz)
+
     _ -> throwError $ Error ("Unimplemented lineariation for " ++ prettyShow b) callStack
 
 

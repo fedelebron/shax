@@ -7,7 +7,7 @@ module TypeInference (inferTypes, checkDefArgumentTypes) where
 import Control.Monad
 import Control.Monad.Except (MonadError, throwError)
 import Control.Monad.State
-import Data.List (sort, (\\))
+import Data.List (sort, (\\), intercalate)
 import qualified Data.Map as M
 import GHC.Stack
 import Text.PrettyPrint.HughesPJClass
@@ -72,7 +72,7 @@ inferExprType paramTypes op argTys = case (op, argTys) of
       Just ty -> Right ty
   (Constant k, []) -> return (tensorType k)
   (UnaryPointwise _, [x]) -> return x
-  (op@(BinaryPointwise _), [x, y]) -> broadcastSemantics x y
+  (BinaryPointwise op, [x, y]) -> broadcastSemantics op x y
   (Reshape sh, [TensorType bt sh']) -> do
     assertTrue (product sh == product sh') (Error ("Invalid reshape: " ++ show sh' ++ " -> " ++ show sh) callStack)
     return (TensorType bt sh)
@@ -138,6 +138,10 @@ inferExprType paramTypes op argTys = case (op, argTys) of
             ]
           sh = lhsB' ++ lhsNonContracting ++ rhsNonContracting
       return (TensorType b sh)
+  (Select, [TensorType TBool shb, TensorType tx shx, TensorType ty shy]) -> do
+    assertTrue (tx == ty) $ Error ("Cannot select tensors of different base types: " ++ show (tx, ty)) callStack
+    assertTrue (shb == shx && shx == shy) $ Error ("Invalid argument shapes for select: " ++ intercalate ", " (map show [shb, shx, shy])) callStack
+    return (TensorType tx shx)
   _ -> Left $ Error ("Invalid number of arguments for " ++ prettyShow op ++ ": " ++ show (length argTys)) callStack
 
 applyPermutation :: (HasCallStack, MonadError Error m) => [Int] -> Shape -> m Shape
@@ -156,14 +160,17 @@ applyPermutation perm sh =
                 callStack
             )
 
-broadcastSemantics :: (HasCallStack) => TensorType -> TensorType -> Either Error TensorType
-broadcastSemantics (TensorType abt ash) (TensorType bbt bsh) =
+broadcastSemantics :: (HasCallStack) => BinaryScalarOp -> TensorType -> TensorType -> Either Error TensorType
+broadcastSemantics op (TensorType abt ash) (TensorType bbt bsh) =
   let (ash', bsh') = padToSameLength ash bsh
       result = zipWith max ash' bsh'
+      resultBaseType = if op `elem` [Eq]
+                       then TBool
+                       else abt
    in do
         zipWithM_ checkMatchingDim ash' bsh'
         unless (abt == bbt) $ throwError (Error "Different binary operation argument base types not supported." callStack)
-        return $ TensorType abt result
+        return $ TensorType resultBaseType result
   where
     checkMatchingDim :: (HasCallStack) => Int -> Int -> Either Error ()
     checkMatchingDim i j

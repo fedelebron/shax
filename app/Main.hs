@@ -29,7 +29,7 @@ rightOrDie :: (Show e) => Either e a -> IO a
 rightOrDie (Right x) = return x
 rightOrDie (Left e) = error (show e)
 
-medium :: forall a. (HNP a, Floating a) => a -> a -> a
+medium :: forall a. (HNP a, Ord a, Floating a) => a -> a -> a
 medium x0 x8 =
         let x1 = broadcast [1] [2, 6] x0
             x2 = sin x1
@@ -39,8 +39,10 @@ medium x0 x8 =
             x6 = transpose [1, 0] x4
             x7 = x5 `dot` x6
             x9 = x7 * x8
-            x10 = reduceSum [0] x9
-         in x10
+            x10 = x7 + x8
+            x11 = min x9 x10
+            x12 = reduceSum [0] x11
+         in x12
 
 linearizationDemo :: IO ()
 linearizationDemo = do
@@ -52,7 +54,7 @@ linearizationDemo = do
   putStrLn "After type inference:"
   putStrLn (showDef 2 typedDef)
   let typedDef' = lowerReductionsToSumsOfSlices (canonicalizeDotGeneral typedDef)
-  putStrLn "After rewrites:"
+  putStrLn "After rewrites (canonicalizing `dot`s and lowering `reduce_sum` to pointwise `+` and `slice`):"
   putStrLn (showDef 2 typedDef')
   linearizedDef <- rightOrDie (linearize typedDef')
   putStrLn "Linearized definition(s):"

@@ -7,7 +7,7 @@ import qualified Data.Array.Dynamic as D
 import qualified Data.Array.Dynamic.MatMul as MM
 import Data.Fix
 import Data.Int (Int64)
-import Data.List ((\\))
+import Data.List ((\\), intercalate)
 import Shaxpr
 import Types
 import Tensor
@@ -19,8 +19,10 @@ class HNP a where
   slice :: DimIxs -> DimIxs -> a -> a
   pad :: [(Int, Int)] -> Float -> a -> a
   reduceSum :: DimIxs -> a -> a
+  select :: a -> a -> a -> a
   dotGeneral :: DotDimensionNumbers -> a -> a -> a
   dot :: a -> a -> a
+  eq :: a -> a -> a
   dot = dotGeneral (DotDimensionNumbers [1] [0] [] [])
 
 wrapArrayOperation :: (forall a. Num a => D.Array a -> D.Array a) -> Tensor -> Tensor
@@ -68,6 +70,20 @@ matMulArr3 (FloatTensor x) (FloatTensor y) =
   FloatTensor (D.rerank2 1 MM.matMul x y)
 matMulArr3 _ _ = error "Cannot happen."
 
+selectArr :: Tensor -> Tensor -> Tensor -> Tensor
+selectArr (BoolTensor b) (FloatTensor x) (FloatTensor y) = FloatTensor (D.zipWith3A selector b x y)
+selectArr (BoolTensor b) (IntTensor x) (IntTensor y) = IntTensor (D.zipWith3A selector b x y)
+selectArr b x y = error $ "Invalid argument types to selectArr: " ++ intercalate ", " (map (show . tensorType) [b, x, y])
+
+selector :: Bool -> a -> a -> a
+selector True x _ = x
+selector False _ y = y
+
+eqArr :: Tensor -> Tensor -> Tensor
+eqArr (FloatTensor xs) (FloatTensor ys) = BoolTensor (D.zipWithA (==) xs ys)
+eqArr (IntTensor xs) (IntTensor ys) = BoolTensor (D.zipWithA (==) xs ys)
+eqArr (BoolTensor xs) (BoolTensor ys) = BoolTensor (D.zipWithA (==) xs ys)
+
 instance HNP Tensor where
   reshape = reshapeArr
   broadcast = broadcastArr
@@ -75,6 +91,8 @@ instance HNP Tensor where
   pad = padArr
   transpose = transposeArr
   reduceSum = reduceSumArr
+  select = selectArr
+  eq = eqArr
                       
 
   dotGeneral dims x y =
@@ -112,3 +130,5 @@ instance HNP Shaxpr where
   reduceSum ixs x = Shaxpr . Fix $ ReduceSumShaxprF ixs (expr x)
   transpose = ((Shaxpr . Fix) .) . (. expr) . TransposeShaxprF
   dotGeneral d x y = Shaxpr . Fix $ DotGeneralShaxprF d (expr x) (expr y)
+  select b x y = Shaxpr . Fix $ SelectShaxprF (expr b) (expr x) (expr y)
+  eq x y = Shaxpr . Fix $ EqShaxprF (expr x) (expr y)

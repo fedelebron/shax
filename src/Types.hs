@@ -7,10 +7,11 @@ module Types(module Types) where
 import Text.PrettyPrint.HughesPJClass
 import Prelude hiding ((<>))
 
-data TensorBaseType = TFloat | TInt deriving (Show, Eq, Ord)
+data TensorBaseType = TFloat | TInt | TBool deriving (Show, Eq, Ord)
 instance Pretty TensorBaseType where
   pPrint TFloat = text "f32"
   pPrint TInt = text "i32"
+  pPrint TBool = text "bool"
 
 type Shape = [Int]
 type DimIxs = [Int]

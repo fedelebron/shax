@@ -30,6 +30,7 @@ module Shaxpr
     pattern ExpShaxprF,
     pattern MaxShaxprF,
     pattern MinShaxprF,
+    pattern EqShaxprF,
     pattern SignumShaxprF,
     pattern NegateShaxprF,
     pattern ReshapeShaxprF,
@@ -39,6 +40,7 @@ module Shaxpr
     pattern PadShaxprF,
     pattern TransposeShaxprF,
     pattern DotGeneralShaxprF,
+    pattern SelectShaxprF
   )
 where
 
@@ -51,7 +53,7 @@ import Text.Show.Deriving
 import Types
 import Tensor
 
-data BinaryScalarOp = Add | Sub | Mul | Div | Min | Max deriving (Show, Eq, Ord)
+data BinaryScalarOp = Add | Sub | Mul | Div | Min | Max | Eq deriving (Show, Eq, Ord)
 
 instance Pretty BinaryScalarOp where
   pPrint Add = text "add"
@@ -60,6 +62,7 @@ instance Pretty BinaryScalarOp where
   pPrint Div = text "div"
   pPrint Min = text "min"
   pPrint Max = text "max"
+  pPrint Eq = text "eq"
 
 data UnaryScalarOp = Id | Sin | Cos | Exp | Signum | Negate deriving (Show, Eq, Ord)
 
@@ -96,6 +99,7 @@ data Op
   | Pad [(Int, Int)] Float 
   | Transpose DimIxs
   | DotGeneral DotDimensionNumbers
+  | Select
   deriving (Show, Eq, Ord)
 
 instance Pretty Op where
@@ -115,6 +119,7 @@ instance Pretty Op where
   pPrintPrec _ _ (DotGeneral dims) = case dims of
     DotDimensionNumbers [1] [0] [] [] -> text "dot"
     _ -> text $ "dot_general " ++ prettyShow dims
+  pPrintPrec _ _ Select = text "select"
 
 data ShaxprF rep = ShaxprF
   { exprOp :: Op,
@@ -170,6 +175,9 @@ pattern MinShaxprF x y = ShaxprF (BinaryPointwise Min) [x, y]
 pattern MaxShaxprF :: a -> a -> ShaxprF a
 pattern MaxShaxprF x y = ShaxprF (BinaryPointwise Max) [x, y]
 
+pattern EqShaxprF :: a -> a -> ShaxprF a
+pattern EqShaxprF x y = ShaxprF (BinaryPointwise Eq) [x, y]
+
 pattern IdShaxprF :: a -> ShaxprF a
 pattern IdShaxprF x = ShaxprF (UnaryPointwise Id) [x]
 
@@ -208,6 +216,9 @@ pattern NegateShaxprF x = ShaxprF (UnaryPointwise Negate) [x]
 
 pattern DotGeneralShaxprF :: DotDimensionNumbers -> a -> a -> ShaxprF a
 pattern DotGeneralShaxprF dims x y = ShaxprF (DotGeneral dims) [x, y]
+
+pattern SelectShaxprF :: a -> a -> a -> ShaxprF a
+pattern SelectShaxprF b x y = ShaxprF Select [b, x, y]
 
 fromConstant :: Tensor -> Shaxpr
 fromConstant arr = Shaxpr . Fix $ ConstantShaxprF arr

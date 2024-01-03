@@ -42,6 +42,7 @@ evalShaxprF (Fix (SinShaxprF x)) = sin (evalShaxprF x)
 evalShaxprF (Fix (ExpShaxprF x)) = exp (evalShaxprF x)
 evalShaxprF (Fix (MinShaxprF x y)) = wrapBroadcastSemantics min x y
 evalShaxprF (Fix (MaxShaxprF x y)) = wrapBroadcastSemantics max x y
+evalShaxprF (Fix (EqShaxprF x y)) = wrapBroadcastSemantics eq x y
 evalShaxprF (Fix (BroadcastShaxprF ixs sh x)) = broadcast ixs sh (evalShaxprF x)
 evalShaxprF (Fix (SliceShaxprF sixs eixs x)) = slice sixs eixs (evalShaxprF x)
 evalShaxprF (Fix (PadShaxprF lohi val x)) = pad lohi val (evalShaxprF x)
@@ -50,6 +51,7 @@ evalShaxprF (Fix (ReshapeShaxprF sh x)) = reshape sh (evalShaxprF x)
 evalShaxprF (Fix (ReduceSumShaxprF ixs x)) = reduceSum ixs (evalShaxprF x)
 evalShaxprF (Fix (ParamShaxprF _)) = error "Cannot evaluate an expression with unbound variables."
 evalShaxprF (Fix (DotGeneralShaxprF dims x y)) = dotGeneral dims (evalShaxprF x) (evalShaxprF y)
+evalShaxprF (Fix (SelectShaxprF b x y)) = select (evalShaxprF b) (evalShaxprF x) (evalShaxprF y)
 evalShaxprF e = error $ "Invalid expression being evaluated! " ++ show e
 
 type BindingState = M.Map Var Tensor
