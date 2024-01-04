@@ -77,7 +77,7 @@ linearizationDemo = do
   putStrLn "dft(ct):"
   putStrLn (prettyShow dct)
   putStrLn "Ziped primal and transpose:"
-  let vjp = forwardIdentities (zipDefinitions transposedDef)
+  let vjp = eliminateDeadCode (eliminateCommonSubexpressions (forwardIdentities (zipDefinitions transposedDef)))
   putStrLn (showDef 2 vjp)
   rightOrDie (checkTypes vjp)
   resultAndCotangent <- rightOrDie (evalDefinition vjp (x ++ ct))
