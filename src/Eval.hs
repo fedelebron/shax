@@ -1,10 +1,11 @@
-module Eval (evalFunc, evalShaxpr, evalDefinition) where
+module Eval (evalFunc, evalShaxpr, evalDefinition, evalLinearizedDefinition) where
 
 import Bind
 import BroadcastSemantics
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Fix
+import Data.List (splitAt)
 import qualified Data.Map as M
 import Definition
 import Error
@@ -97,3 +98,10 @@ evalFunc :: (HasCallStack) => Op -> [Tensor] -> Tensor
 evalFunc op args = evalShaxprF (Fix (ShaxprF op args'))
   where
     args' = map (Fix . ConstantShaxprF) args
+
+evalLinearizedDefinition :: LinearizedDefinition -> [Tensor] -> [Tensor] -> Either Error ([Tensor], [Tensor])
+evalLinearizedDefinition def x dx = do
+  allRet <- evalDefinition (nonlinear def) x
+  let (y, env) = splitAt (length allRet - envSize def) allRet
+  dy <- evalDefinition (linear def) (dx ++ env)
+  return (y, dy)                                                        

@@ -9,6 +9,7 @@ module Optimizations
     materializeBroadcasts,
     canonicalizeDotGeneral,
     lowerReductionsToSumsOfSlices,
+    forwardIdentities,
     OptimizationPass (..),
     applyPasses,
   )
@@ -46,6 +47,7 @@ data OptimizationPass
   | MaterializeBroadcasts
   | CanonicalizeDotGeneral
   | LowerReductionsToSumsOfSlices
+  | ForwardIdentities
   deriving (Show, Eq, Ord, Generic)
   deriving (Arbitrary) via GenericArbitrary OptimizationPass
 
@@ -56,6 +58,7 @@ applyPass CSE = eliminateCommonSubexpressions
 applyPass MaterializeBroadcasts = materializeBroadcasts
 applyPass CanonicalizeDotGeneral = canonicalizeDotGeneral
 applyPass LowerReductionsToSumsOfSlices = lowerReductionsToSumsOfSlices
+applyPass ForwardIdentities = forwardIdentities
 
 applyPasses :: [OptimizationPass] -> Definition -> Definition
 applyPasses = foldr (.) id . map applyPass
@@ -225,3 +228,9 @@ indicesForSplitAt i l sh = let complementPos = length sh - i
                                rl = take i sh
                                rr = drop (i + 1) sh
                             in  (ll++l:lr, rl++complement:rr)
+
+forwardIdentities :: Definition -> Definition
+forwardIdentities = walkBindingsOrDie () forward
+  where
+    forward b@(Bind v' (IdShaxprF v)) = return v
+    forward b = keepBind b

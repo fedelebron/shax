@@ -13,7 +13,7 @@
 -- (f(x_0), \dx -> dx * cos(x_0)).
 -- Note how \dx -> dx * cos(x_0) is _always_ linear in dx, and f(x_0) is a constant
 -- term in dx.
-module Linearize (linearize, LinearizedDefinition(..), evalLinearizedDefinition) where
+module Linearize (linearize) where
 
 import GHC.Stack
 import qualified Data.Map as M
@@ -94,24 +94,6 @@ getTangentForPrimal v = use (extra . primalToTangent) >>= lift . E.lookup v
 setTangentForPrimal :: Var -> TangentVar -> LinearizationComputation ()
 setTangentForPrimal v dotv = cannotFail (extra . primalToTangent %= E.insert v dotv)
 
-data LinearizedDefinition = LinearizedDefinition {
-  nonlinear :: Definition,
-  linear :: Definition,
-  -- The last {envSize} outputs of nonlinear
-  -- are the last {envSize} inputs to linear.
-  envSize :: Int
-} deriving Show
-
-instance Pretty LinearizedDefinition where
-  pPrintPrec k level (LinearizedDefinition nl l _) = vcat [pPrintPrec k level nl,
-                                                           pPrintPrec k level l]
-
-evalLinearizedDefinition :: LinearizedDefinition -> [Tensor] -> [Tensor] -> Either Error ([Tensor], [Tensor])
-evalLinearizedDefinition def x dx = do
-  allRet <- evalDefinition (nonlinear def) x
-  let (y, env) = splitAt (length allRet - envSize def) allRet
-  dy <- evalDefinition (linear def) (dx ++ env)
-  return (y, dy)
 
 -- linearize p f = (f(p), f'_p)
 linearize :: HasCallStack => Definition -> Either Error LinearizedDefinition

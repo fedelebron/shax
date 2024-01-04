@@ -1,4 +1,4 @@
-module Definition(Def(..), Definition, toDef, rename) where
+module Definition(Def(..), Definition, LinearizedDefinition(..), toDef, rename, zipDefinitions) where
 
 import Control.Monad.State
 import qualified Data.Map as M
@@ -53,3 +53,47 @@ toDef name tys fs =
 
 rename :: String -> Definition -> Definition
 rename k def = def {defName = k}
+
+data LinearizedDefinition = LinearizedDefinition {
+  nonlinear :: Definition,
+  linear :: Definition,
+  -- The last {envSize} outputs of nonlinear
+  -- are the last {envSize} inputs to linear.
+  envSize :: Int
+} deriving Show
+
+instance Pretty LinearizedDefinition where
+  pPrintPrec k level (LinearizedDefinition nl l _) = vcat [pPrintPrec k level nl,
+                                                           pPrintPrec k level l]
+
+zipDefinitions :: LinearizedDefinition -> Definition
+zipDefinitions (LinearizedDefinition nonlinear linear eSize) = 
+  let numNonLinearParams = length (defArgTys nonlinear)
+      numNonLinearResults = length (defRet nonlinear) - eSize
+      numLinearParams = length (defArgTys linear) - eSize
+      envReturns = drop numNonLinearResults (defRet nonlinear)
+      envParamNumbers = [numLinearParams .. ]
+      envParamMap = M.fromList (zip envParamNumbers envReturns)
+      maxNonLinearBindName = maximum (map (unVarName . varName . bindVar) (defBinds nonlinear))
+      firstLinearBindName = 1 + maxNonLinearBindName
+      fixVar (Var (VarName vn) vt) = Var (VarName (firstLinearBindName + vn)) vt
+      fixBind (Bind vn e) = Bind (fixVar vn) (fmap fixVar e)
+      fixParamRead (Bind v (ParamShaxprF k))
+        -- If k >= numLinearParams, this is an environment read.
+        -- We map these to identity functions of the corresponding return
+        -- values from the primal program.
+        | k >= numLinearParams,
+          Just v' <- M.lookup k envParamMap = Bind v (IdShaxprF v')
+      fixParamRead (Bind v (ParamShaxprF k))
+        -- If k < numLinearParams, this is a linear parameter read.
+        -- We map these to parameters in the new, zipped definition, all
+        -- of which come after the original function's primal params.
+        | k < numLinearParams = Bind v (ParamShaxprF (k + numNonLinearParams))
+      fixParamRead x = x
+      newLinearBinds = map (fixParamRead . fixBind) (defBinds linear)
+  in  Def {
+    defName = defName nonlinear ++ "_" ++ defName linear,
+    defArgTys = defArgTys nonlinear ++ take numLinearParams (defArgTys linear),
+    defBinds = defBinds nonlinear ++ newLinearBinds,
+    defRet = take numNonLinearResults (defRet nonlinear) ++ map fixVar (defRet linear)
+  }

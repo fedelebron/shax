@@ -2,7 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module TypeInference (inferTypes, checkDefArgumentTypes) where
+module TypeInference (inferTypes, checkDefArgumentTypes, checkTypes) where
 
 import Control.Monad
 import Control.Monad.Except (MonadError, throwError)
@@ -28,8 +28,41 @@ data BindingState = BindingState {
 }
 makeLenses 'BindingState
 
-
 type BindingComputation = StateT BindingState (Either Error)
+
+checkTypes :: Definition -> Either Error ()
+checkTypes def = do
+  let untyped = eraseDefTypes def
+  reTyped <- inferTypes untyped
+  let originalTypes = bindTypes def
+      inferredTypes = bindTypes reTyped
+      diff = diffMaps originalTypes inferredTypes
+  unless (null diff) $
+    throwError (Error ("Definition failed typecheck, differences between given types and correct types:" ++ prettyShow diff) callStack)
+
+eraseDefTypes :: Definition -> Def VarName
+eraseDefTypes def = Def {
+  defName = defName def,
+  defRet = map eraseVarType (defRet def),
+  defArgTys = defArgTys def,
+  defBinds = map eraseBindType (defBinds def)
+}
+  where
+    eraseVarType (Var v _) = v
+    eraseBindType (Bind v e) = Bind (eraseVarType v) (fmap eraseVarType e)
+
+bindTypes :: Definition -> M.Map VarName TensorType
+bindTypes = M.fromList . map (makeType . bindVar) . defBinds
+  where
+    makeType (Var vn t) = (vn, t)
+
+diffMaps :: (Eq k, Eq v) => M.Map k v -> M.Map k v -> [(k, v, v)]
+diffMaps m1 m2 = map snd . filter fst $ zipWith diffEntries (M.toList m1) (M.toList m2)
+  where
+    diffEntries (k, v) (k', v')
+      | k /= k' = error "Cannot diff maps with different keys."
+      | otherwise = (v /= v', (k, v, v'))
+
 
 inferTypes :: HasCallStack => Def VarName -> Either Error Definition
 inferTypes defn = do
@@ -48,14 +81,13 @@ inferTypes defn = do
   where
     paramTypes = M.fromList (zip [0 ..] (defArgTys defn))
     typeBind :: Bind VarName -> BindingComputation ()
-    typeBind b@(Bind vn (ShaxprF op args)) = do
-      argTys <-  mapM lookupVariableType args
-      correctType <- prependToErrors ("While typing " ++ prettyShow b ++ ": ")
-                     . lift
-                     $ inferExprType paramTypes op argTys
-      let v' = Var vn correctType
-      bindEnv %= E.insert v' (Bind v' (ShaxprF op (zipWith Var args argTys)))
-      labelToType %= M.insert vn correctType
+    typeBind b@(Bind vn (ShaxprF op args)) =
+      prependToErrors ("While typing " ++ prettyShow b ++ ": ") $ do
+        argTys <- mapM lookupVariableType args
+        correctType <- lift $ inferExprType paramTypes op argTys
+        let v' = Var vn correctType
+        bindEnv %= E.insert v' (Bind v' (ShaxprF op (zipWith Var args argTys)))
+        labelToType %= M.insert vn correctType
 
 lookupVariableType :: HasCallStack => VarName -> BindingComputation TensorType
 lookupVariableType vn = do

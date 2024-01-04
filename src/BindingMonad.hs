@@ -22,7 +22,7 @@ import Types
 import Error
 import Shaxpr
 
-type RenameMap = B.BiMap Var Var
+type RenameMap = M.Map Var Var
 data BindingMonadState a = BindingMonadState {
   -- The bindings being produced.
   _env :: E.Env Binding,
@@ -30,7 +30,7 @@ data BindingMonadState a = BindingMonadState {
   -- new definition variable names.
   _remap :: RenameMap,
   -- Extra metadata that the caller wants to have.
-  _extra :: a  
+  _extra :: a
 }
 makeLenses 'BindingMonadState
 
@@ -41,7 +41,7 @@ type BindingMapper a = Binding -> BindingMonadComputation a Var
 makeInitialState :: a -> BindingMonadState a
 makeInitialState a = BindingMonadState {
     _env = E.empty,
-    _remap = B.empty,
+    _remap = M.empty,
     _extra = a
   }
 
@@ -65,9 +65,9 @@ walkBindingsOrDie = (((fst . fromRight err) .) .) . walkBindings
     err = error "Internal error: Failed to walk bindings."
 
 maybeRename :: Var -> RenameMap -> Var
-maybeRename x = B.lookupValWithDefault x x
+maybeRename x = M.findWithDefault x x
 
-wrapRenaming :: HasCallStack => BindingMapper a -> Binding -> BindingMonadComputation a Binding
+wrapRenaming :: HasCallStack => BindingMapper a -> Binding -> BindingMonadComputation a ()
 wrapRenaming f (Bind v (ShaxprF op args)) = do
   currentRemap <- use remap
   let args' = map (`maybeRename` currentRemap) args
@@ -76,8 +76,7 @@ wrapRenaming f (Bind v (ShaxprF op args)) = do
   case E.lookup v' newEnv of
     Left _ -> throwError $ Error ("Binding mapper returned variable " ++ prettyShow v' ++ ", which is not in the modified environment: " ++ prettyShow newEnv) callStack
     Right b'' -> cannotFail $ do
-      remap %= B.insertWithKey v v'
-      return b''
+      remap %= M.insert v v'
 
 freshVar :: BindingMonadComputation a VarName
 freshVar = E.nextName <$> use env

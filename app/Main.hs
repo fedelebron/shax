@@ -76,6 +76,13 @@ linearizationDemo = do
   putStrLn (prettyShow yy)
   putStrLn "dft(ct):"
   putStrLn (prettyShow dct)
+  putStrLn "Ziped primal and transpose:"
+  let vjp = forwardIdentities (zipDefinitions transposedDef)
+  putStrLn (showDef 2 vjp)
+  rightOrDie (checkTypes vjp)
+  resultAndCotangent <- rightOrDie (evalDefinition vjp (x ++ ct))
+  putStrLn "VJP:"
+  putStrLn (prettyShow resultAndCotangent)
 
 
 f :: forall a. Floating a => a -> a -> a
