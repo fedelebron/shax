@@ -19,6 +19,7 @@ import           Tensor
 import           Transpose
 import           TypeInference
 import           Types
+import           AD
 import           Text.Printf (vFmt)
 import Optimizers (gradientDescent)
 
@@ -101,6 +102,8 @@ descentDemo = do
       putStrLn ("Minimum location: " ++ show minParam)
       putStrLn ("Minimum value: " ++ show minVal)
     Left err -> print err
+  jvpDef <- rightOrDie (jvp typedDef)
+  putStrLn (showDef 2 jvpDef)
 
 main :: IO ()
 main = descentDemo >> putStrLn "\n" >> linearizationDemo

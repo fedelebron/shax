@@ -25,6 +25,7 @@ source-repository head
 
 library
   exposed-modules:
+      AD
       BiMap
       Bind
       BindingMonad
@@ -58,6 +59,7 @@ library
     , fin >=0.3
     , generic-arbitrary >=1.0.1
     , lens >=5.2.3
+    , mlir-hs
     , mtl >=2.3.1
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0
@@ -84,6 +86,7 @@ executable shax-exe
     , fin >=0.3
     , generic-arbitrary >=1.0.1
     , lens >=5.2.3
+    , mlir-hs
     , mtl >=2.3.1
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0
@@ -113,6 +116,7 @@ test-suite shax-test
     , fin >=0.3
     , generic-arbitrary >=1.0.1
     , lens >=5.2.3
+    , mlir-hs
     , mtl >=2.3.1
     , orthotope >=0.1.6.0
     , orthotope-hmatrix >=0.1.2.0

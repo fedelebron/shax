@@ -102,6 +102,38 @@ packages:
       size: 739
   original:
     hackage: exceptions-0.10.7@sha256:60ccc2277f8fa98a1a03c42afd9c589ba33ce208eaaef7d69bfbb42ce09d1816,2803
+- completed:
+    name: mlir-hs
+    pantry-tree:
+      sha256: e960019897feea18efda6575ca94257558c57a6634d077b5a7488c0c9a5dd45d
+      size: 2683
+    sha256: f2563792d838055e2ea0baed2dbd03a5a1b2a430960c9c3534d5fe17af1c147f
+    size: 46553
+    url: https://github.com/google/mlir-hs/archive/1cc6c641fe81446f16eec052104feac5de217569.tar.gz
+    version: 0.1.0.0
+  original:
+    url: https://github.com/google/mlir-hs/archive/1cc6c641fe81446f16eec052104feac5de217569.tar.gz
+- completed:
+    hackage: Cabal-3.10.2.1@sha256:0f7cc73c7c0c18464ce249c97267a5188d796690a926d73b6e084a4612a66e32,12693
+    pantry-tree:
+      sha256: 1b310294470d20ce457d90738b33dcf4fa952cf5d5f7df60cd1e47ea8a5dccba
+      size: 9224
+  original:
+    hackage: Cabal-3.10.2.1@sha256:0f7cc73c7c0c18464ce249c97267a5188d796690a926d73b6e084a4612a66e32,12693
+- completed:
+    hackage: parsec-3.1.17.0@sha256:6cf18e59d9f1c5b40385457b82ab679dc18d3c5bd3c2c67b2f94e1e8732e6624,5119
+    pantry-tree:
+      sha256: cca87377fcfe25583e1f7aadc4971111a86c2e66002dffa304be92f294db32c8
+      size: 2810
+  original:
+    hackage: parsec-3.1.17.0@sha256:6cf18e59d9f1c5b40385457b82ab679dc18d3c5bd3c2c67b2f94e1e8732e6624,5119
+- completed:
+    hackage: Cabal-syntax-3.10.2.0@sha256:b2235bd61763a826259805a34ba3538888fe06850fc6bc1712e625baedf07c16,7675
+    pantry-tree:
+      sha256: 2130300bf88bad99a883a5f0fdc07f7c8bdb93e5e3ac2f25255b9b8d32b23f9c
+      size: 11052
+  original:
+    hackage: Cabal-syntax-3.10.2.0@sha256:b2235bd61763a826259805a34ba3538888fe06850fc6bc1712e625baedf07c16,7675
 snapshots:
 - completed:
     sha256: 8809197159ce65ec2d66f91982e4844ad0c2cbd1126df42146dd103c0ea6cac0

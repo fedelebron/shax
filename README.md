@@ -22,10 +22,10 @@ def f(arg0 :: f32[],
       arg1 :: f32[]) =
   let x0 :: f32[] = arg0
       x1 :: f32[] = arg1
-      x2 :: f32[] = add x0 :: f32[] x1 :: f32[]
-      x3 :: f32[] = sin x2 :: f32[]
-      x4 :: f32[] = cos x2 :: f32[]
-      x5 :: f32[] = mul x3 :: f32[] x4 :: f32[]
+      x2 :: f32[] = add x0 x1
+      x3 :: f32[] = sin x2
+      x4 :: f32[] = cos x2
+      x5 :: f32[] = mul x3 x4
   in [x5 :: f32[]]
 Iteration 1: -0.23971277
 Iteration 2: -0.31265023
