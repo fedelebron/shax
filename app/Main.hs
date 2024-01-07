@@ -22,6 +22,7 @@ import           Types
 import           AD
 import           Text.Printf (vFmt)
 import Optimizers (gradientDescent)
+import           Tracing
 
 showDef :: Pretty a => Int -> a -> String
 showDef k = render . pPrintPrec (PrettyLevel k) 0
@@ -50,7 +51,7 @@ medium x0 x8 =
 linearizationDemo :: IO ()
 linearizationDemo = do
   putStrLn "------------------\nLinearization demo\n------------------"
-  let def = toDef "medium" [TensorType TFloat [6], TensorType TFloat [2, 2]] (close (medium @Shaxpr))
+  let def = traceToDef "medium" [Leaf $ TensorType TFloat [6], Leaf $ TensorType TFloat [2, 2]] (medium @Shaxpr)
   putStrLn "After tracing:"
   putStrLn (showDef 2 def)
   typedDef <- rightOrDie (inferTypes def)
@@ -92,7 +93,7 @@ f x y = let z = x + y
 descentDemo :: IO ()
 descentDemo = do
   putStrLn "---------------------\nGradient descent demo\n---------------------"
-  let def = toDef "f" [TensorType TFloat [], TensorType TFloat []] (close (f @Shaxpr))
+  let def = traceToDef "f" [Leaf $ TensorType TFloat [], Leaf $ TensorType TFloat []] (f @Shaxpr)
   let p = [FloatTensor (D.fromList [] [0.5]), FloatTensor (D.fromList [] [-0.75])]
   typedDef <- rightOrDie (inferTypes def)
   putStrLn (showDef 2 typedDef)

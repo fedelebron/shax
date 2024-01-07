@@ -16,7 +16,6 @@ module Shaxpr
     UnaryScalarOp (..),
     BinaryScalarOp (..),
     fromConstant,
-    close,
     DotDimensionNumbers (..),
     pattern ConstantShaxprF,
     pattern ParamShaxprF,
@@ -146,6 +145,9 @@ instance Pretty (Fix ShaxprF) where
   pPrintPrec :: PrettyLevel -> Rational -> Fix ShaxprF -> Doc
   pPrintPrec k l (Fix x) = pPrintPrec k l x
 
+instance Pretty Shaxpr where
+  pPrintPrec k l = pPrintPrec k l . expr
+
 -- Helper patterns for matching on well-constructed expression trees.
 -- Note these are not technically complete, as in, there exist syntactically
 -- valid values of type Fix ShaxprF which are not matched by any of these
@@ -244,18 +246,3 @@ instance Ord Shaxpr where
   min = (( Shaxpr . Fix) .) . (. expr) . MinShaxprF . expr
   max = (( Shaxpr . Fix) .) . (. expr) . MaxShaxprF . expr
   compare = error "Cannot compare abstract expressions for order."
-
-class Closable t where
-  close' :: Int -> t -> [Shaxpr]
-
-instance Closable Shaxpr where
-  close' = const return
-
-instance Closable [Shaxpr] where
-  close' = const id
-
-instance (Closable b) => Closable ( Shaxpr -> b) where
-  close' k f = close' (k + 1) (f ( Shaxpr (Fix (ParamShaxprF k))))
-
-close :: (Closable t) => t -> [Shaxpr]
-close = close' 0
